@@ -128,11 +128,17 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         'Prefer this tool when you need to chain tool calls, loop, filter large',
         'results, or compute — do the work in code and print only what you need.',
         '',
-        'Available functions:',
+        'Functions available INSIDE the code (these are not separate tools — invoke',
+        `them from Python passed to ${toolName}):`,
         '',
         registry.renderStubs(),
         ...(savedSummary
-          ? ['', 'Saved tools (already loaded, call them directly):', savedSummary]
+          ? [
+              '',
+              'Saved functions (already defined in the session — call them from your',
+              `code like any function, e.g. via ${toolName} with "result = name(...)"):`,
+              savedSummary,
+            ]
           : []),
         '',
         'Rules:',
@@ -141,6 +147,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
       promptSnippet: `${toolName}: run sandboxed Python; host tools are callable as functions; state persists`,
       promptGuidelines: [
         `Use ${toolName} for multi-step tool workflows: loop/filter/aggregate in code and print only the result, instead of issuing many separate tool calls.`,
+        `Functions listed in the ${toolName} tool description (read_file, http_get, save_tool, and any saved functions) are NOT standalone tools — they only exist inside ${toolName}'s Python environment. To use one, call ${toolName} with code that invokes it.`,
       ],
       parameters: PythonParams,
       async execute(_toolCallId, params, signal, onUpdate, _ctx) {
