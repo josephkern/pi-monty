@@ -114,12 +114,16 @@ verifying external functions, pause/resume, REPL dump/load, tracebacks, limits.
 - caveats: non-deterministic code (e.g. `datetime.now()`) can diverge on replay;
   replay cost grows with transcript length (monty is fast; fine at session scale)
 
-### M4 — pi extension (MVP ships here)
-- `src/pi/extension.ts` registering a `python` tool (Typebox params: `{ code }`)
-- streaming `print()` output via `onUpdate`; `truncateHead` on final output
-- session state restored from tool-result `details` on `session_start` (branch-safe:
-  replay saved code definitions rather than raw heap bytes where possible)
-- install instructions: symlink/copy into `.pi/extensions/` or `pi -e`
+### M4 — pi extension (MVP ships here) ✅
+- `src/pi/extension.ts`: `createPythonExtension(options)` + default export;
+  registers a `python` tool (Typebox params `{ code, reset? }`) whose description
+  embeds the rendered stubs + rules
+- streaming `print()` output via `onUpdate` (new `onPrint` core option, replay-aware);
+  `truncateHead` on final output; tracebacks returned as content (observation channel)
+- session state rides in tool-result `details` (JSON dump) and is restored from
+  `ctx.sessionManager.getBranch()` on `session_start` — branch-safe
+- typechecked against the real `@earendil-works/pi-coding-agent` types; tested via a
+  mock ExtensionAPI; run live with `pi -e src/pi/extension.ts`
 
 ### M5 — Ephemeral code tools ("skills")
 The general-purpose payoff: the agent builds its own toolbox.

@@ -87,9 +87,21 @@ export class Session {
       })),
     )
 
+    // Replay re-prints earlier snippets' output; forward only chunks past it.
+    const replayChars = this.stdout.length
+    let printed = 0
+    const onPrint = options.onPrint
+      ? (text: string) => {
+          const start = printed
+          printed += text.length
+          if (printed > replayChars) options.onPrint!(text.slice(Math.max(0, replayChars - start)))
+        }
+      : undefined
+
     const runner = new CodeRunner({ tools: wrapped, limits: this.limits })
     const result = await runner.run(combined, {
       ...options,
+      onPrint,
       inputs: Object.keys(inputs).length > 0 ? inputs : undefined,
     })
 

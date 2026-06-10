@@ -74,6 +74,8 @@ export interface RunOptions {
   scriptName?: string
   /** Cap on captured stdout bytes; output beyond it is dropped. Default 1 MiB. */
   maxStdoutBytes?: number
+  /** Streaming observer for print() chunks, called as they happen (uncapped). */
+  onPrint?: (text: string) => void
 }
 
 export interface RunResult {

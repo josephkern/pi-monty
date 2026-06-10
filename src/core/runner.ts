@@ -66,6 +66,7 @@ export class CodeRunner {
     let stdoutBytes = 0
     let stdoutTruncated = false
     const printCallback = (_stream: string, text: string) => {
+      options.onPrint?.(text)
       stdoutBytes += Buffer.byteLength(text)
       if (stdoutBytes <= maxStdoutBytes) stdout += text
       else stdoutTruncated = true
