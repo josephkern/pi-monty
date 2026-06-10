@@ -5,6 +5,9 @@ export { createBuiltinTools } from './core/builtins.js'
 export type { BuiltinToolsOptions } from './core/builtins.js'
 export { Session } from './core/session.js'
 export type { SessionOptions } from './core/session.js'
+export { ToolStore } from './core/toolstore.js'
+export type { SavedTool } from './core/toolstore.js'
+export { arg, requireString } from './core/args.js'
 export { HostToolError } from './core/types.js'
 export type {
   HostTool,

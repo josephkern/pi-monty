@@ -125,15 +125,15 @@ verifying external functions, pause/resume, REPL dump/load, tracebacks, limits.
 - typechecked against the real `@earendil-works/pi-coding-agent` types; tested via a
   mock ExtensionAPI; run live with `pi -e src/pi/extension.ts`
 
-### M5 — Ephemeral code tools ("skills")
+### M5 — Ephemeral code tools ("skills") ✅
 The general-purpose payoff: the agent builds its own toolbox.
-- `save_tool(name, code, description)` host function — validates the code defines
-  `name`, stores `{name, description, code}` in a project-local store
-  (`.pi/code-tools/*.py` + manifest)
-- saved tools are auto-fed into every new session and listed in the prompt under
-  "your saved tools"; `list_tools()` / `read_tool(name)` for progressive disclosure
-- delete/overwrite semantics; tools are plain Python files — user-inspectable and
-  -editable
+- `save_tool(name, code, description)` host function — validates syntax (monty parse)
+  and that the code defines `name`; stores plain `.py` files (first line
+  `# <description>`) in `.pi/code-tools/` — user-inspectable and -editable
+- saved tools auto-load into fresh sessions as a prelude and are listed in the tool
+  description; `list_saved_tools()` / `read_tool(name)` / `delete_tool(name)` manage
+  the store from inside the sandbox; reserved (host-tool) names can't be shadowed
+- `reset=true` reloads saved tools mid-session; prelude failures degrade gracefully
 
 ## Post-MVP directions
 

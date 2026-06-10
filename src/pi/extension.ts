@@ -15,9 +15,11 @@ import {
 } from '@earendil-works/pi-coding-agent'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
+import { join } from 'node:path'
 import { PYTHON_TOOL_RULES, ToolRegistry } from '../core/registry.js'
 import { createBuiltinTools } from '../core/builtins.js'
 import { Session } from '../core/session.js'
+import { ToolStore } from '../core/toolstore.js'
 import type { HostTool, RunLimits } from '../core/types.js'
 
 const TOOL_NAME = 'python'
@@ -29,6 +31,11 @@ export interface PythonExtensionOptions {
   root?: string
   /** Disable the built-in read_file/list_files/http_get tools. */
   noBuiltins?: boolean
+  /**
+   * Directory for agent-saved tools, or false to disable saving.
+   * Default: <root>/.pi/code-tools.
+   */
+  toolStore?: string | false
   /** Interpreter limits per run (applied to the replayed transcript). */
   limits?: RunLimits
 }
@@ -47,20 +54,44 @@ const PythonParams = Type.Object({
       'Python code to run. The value of the last top-level expression is returned.',
   }),
   reset: Type.Optional(
-    Type.Boolean({ description: 'Discard all session state before running.' }),
+    Type.Boolean({
+      description: 'Discard all session state and reload saved tools before running.',
+    }),
   ),
 })
 
 export function createPythonExtension(options: PythonExtensionOptions = {}) {
-  return (pi: ExtensionAPI) => {
+  return async (pi: ExtensionAPI) => {
+    const root = options.root ?? process.cwd()
     const registry = new ToolRegistry(options.tools)
     if (!options.noBuiltins) {
-      for (const tool of createBuiltinTools({ root: options.root ?? process.cwd() })) {
-        registry.add(tool)
-      }
+      for (const tool of createBuiltinTools({ root })) registry.add(tool)
     }
+    const store =
+      options.toolStore === false ? null : new ToolStore(options.toolStore ?? join(root, '.pi', 'code-tools'))
+    if (store) {
+      for (const tool of store.hostTools((name) => registry.has(name))) registry.add(tool)
+    }
+    const savedSummary = store ? await store.renderSummary() : ''
+
     const sessionOptions = { tools: registry, limits: options.limits }
-    let session = new Session(sessionOptions)
+    // null until first use: a fresh session loads saved tools as a prelude,
+    // which is async, so creation happens lazily in execute().
+    let session: Session | null = null
+    let preludeNote = ''
+
+    async function freshSession(): Promise<Session> {
+      const fresh = new Session(sessionOptions)
+      const prelude = store ? await store.prelude() : ''
+      if (prelude) {
+        const loaded = await fresh.run(prelude)
+        if (!loaded.ok) {
+          preludeNote = `[note: loading saved tools failed, continuing without them]\n${loaded.error}\n\n`
+          fresh.reset()
+        }
+      }
+      return fresh
+    }
 
     // Rebuild session state from the last python tool result on the current
     // branch — `details` travels with the session file, so this survives
@@ -75,7 +106,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
           }
         }
       }
-      session = state ? Session.load(state, sessionOptions) : new Session(sessionOptions)
+      session = state ? Session.load(state, sessionOptions) : null
     })
 
     pi.registerTool({
@@ -90,6 +121,9 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         'Available functions:',
         '',
         registry.renderStubs(),
+        ...(savedSummary
+          ? ['', 'Saved tools (already loaded, call them directly):', savedSummary]
+          : []),
         '',
         'Rules:',
         PYTHON_TOOL_RULES,
@@ -101,7 +135,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
       ],
       parameters: PythonParams,
       async execute(_toolCallId, params, signal, onUpdate, _ctx) {
-        if (params.reset) session.reset()
+        if (params.reset || !session) session = await freshSession()
 
         let streamed = ''
         const result = await session.run(params.code, {
@@ -115,7 +149,8 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
           },
         })
 
-        let text = result.stdout
+        let text = preludeNote + result.stdout
+        preludeNote = ''
         if (result.ok) {
           if (result.output !== null && result.output !== undefined) {
             if (text && !text.endsWith('\n')) text += '\n'

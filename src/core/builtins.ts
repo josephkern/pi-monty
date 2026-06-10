@@ -1,5 +1,6 @@
 import { readFile, readdir, realpath } from 'node:fs/promises'
 import { isAbsolute, resolve, sep } from 'node:path'
+import { arg, requireString } from './args.js'
 import { HostToolError } from './types.js'
 import type { HostTool } from './types.js'
 
@@ -16,21 +17,6 @@ export interface BuiltinToolsOptions {
 
 const DEFAULT_MAX_BYTES = 256 * 1024
 const TRUNCATION_MARKER = '\n[...truncated]'
-
-/** Positional-or-keyword argument lookup, Python-style. */
-function arg(args: unknown[], kwargs: Record<string, unknown>, index: number, name: string): unknown {
-  if (index < args.length && name in kwargs) {
-    throw new HostToolError(`got multiple values for argument '${name}'`, 'TypeError')
-  }
-  return index < args.length ? args[index] : kwargs[name]
-}
-
-function requireString(value: unknown, name: string): string {
-  if (typeof value !== 'string') {
-    throw new HostToolError(`argument '${name}' must be a str`, 'TypeError')
-  }
-  return value
-}
 
 function truncate(text: string, maxBytes: number): string {
   if (Buffer.byteLength(text) <= maxBytes) return text
