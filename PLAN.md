@@ -87,12 +87,14 @@ no classes/match statements; last expression is the result.
 git repo, TypeScript + tsx, @pydantic/monty installed, research notes, smoke test
 verifying external functions, pause/resume, REPL dump/load, tracebacks, limits.
 
-### M1 — CodeRunner (core loop)
-- start/resume loop with external-function dispatch (sync + async host tools)
-- stdout capture, last-expression output, formatted tracebacks on error
+### M1 — CodeRunner (core loop) ✅
+- start/resume loop with external-function dispatch (sync + async host tools),
+  including calls through aliases (named-placeholder trick, docs/research/03-monty.md)
+- stdout capture (capped), last-expression output, formatted tracebacks on error
 - resource limits (defaults: 5s, 64MB), AbortSignal checked between resumes
-- host-tool errors injected as Python exceptions; call trace collection
-- vitest suite covering the smoke-test cases + error paths
+- host-tool errors injected as Python exceptions (`HostToolError` picks the Python
+  exception type); call trace collection
+- vitest suite (17 tests) covering happy paths + error paths
 
 ### M2 — ToolRegistry + prompt rendering
 - `HostTool` registration with name collision/identifier validation

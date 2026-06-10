@@ -49,6 +49,12 @@ pause/resume protocol, in-process.
 - **`printCallback` must return `undefined`** — the NAPI layer raises
   `TypeError: Value is not undefined` on any other return value (e.g. `arr.push(...)`
   returns a number). Wrap in a block body.
+- **Aliased tool calls dispatch by the JS function's `name`**: when a `MontyNameLookup`
+  is resumed with a JS function value, later calls through that value pause as snapshots
+  whose `functionName` is the JS function's `.name` (an anonymous arrow yields `''`).
+  Resume lookups with a placeholder named after the tool and `f = double; f(2)` works.
+- **Last-expression output is module-level only**: an expression at the end of an
+  `except`/`if` block returns `null`; the result must be a top-level expression.
 - **`runMontyAsync` masks runtime errors**: `snapshot.resume({returnValue})` sits inside
   its `try`, so a genuine `MontyRuntimeError` raised by subsequent Python code is caught
   and re-injected into the already-consumed snapshot, surfacing as the cryptic
