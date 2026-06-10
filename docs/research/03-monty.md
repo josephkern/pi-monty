@@ -1,0 +1,92 @@
+# @pydantic/monty notes (v0.0.18, verified from the installed package)
+
+Monty is a minimal, **sandboxed Python interpreter written in Rust** (by the Pydantic
+team), built specifically to run agent-written code. Microsecond startup, no containers.
+Deny-by-default: no filesystem, network, or OS access — the only ways out are host-provided
+external functions, explicit directory mounts, and the print callback. MIT licensed.
+Repo: https://github.com/pydantic/monty. Experimental (0.0.x) — API may churn.
+
+## Core API (from `wrapper.d.ts`)
+
+```ts
+import { Monty, MontyRepl, runMontyAsync, MountDir } from '@pydantic/monty'
+
+const m = new Monty('x + y', { inputs: ['x', 'y'], typeCheck: false })
+m.run({ inputs: { x: 1, y: 2 } })            // sync; returns last expression
+```
+
+### External functions — the tool bridge
+
+Three levels:
+
+1. **Sync**: `m.run({ externalFunctions: { add: (a, b) => a + b } })`
+2. **Async**: `runMontyAsync(m, { externalFunctions: { fetch_data: async (u) => ... },
+   printCallback: (stream, text) => ..., limits, mount, inputs })` — sandboxed Python can
+   `await fetch_data(url)`.
+3. **Pause/resume state machine** (what runMontyAsync is built on):
+
+```ts
+let p = m.start()
+// p is MontySnapshot (paused at external call: .functionName, .args, .kwargs)
+//   | MontyNameLookup (paused at unknown name: .variableName)
+//   | MontyComplete  (.output)
+p = p.resume({ returnValue: 10 })          // or { exception: { type, message } }
+```
+
+Unknown names surface as `MontyNameLookup` — resolve with `.resume({value})` or omit
+value to raise `NameError`. This is literally Anthropic's programmatic-tool-calling
+pause/resume protocol, in-process.
+
+### Gotchas (verified empirically on 0.0.18, see `examples/smoke.ts`)
+
+- `runMontyAsync` calls handlers as `(...args, kwargsObject)` — a kwargs object is
+  always appended, even when empty.
+- **No `await` in sandboxed Python**: external function calls are synchronous from
+  Python's perspective (the pause/resume bridge does the async work host-side).
+  `await get_temp(x)` fails with `TypeError: 'int' object can't be awaited` because
+  resume injects a plain value. The `await` example in wrapper.d.ts JSDoc is wrong for
+  this version.
+- **`printCallback` must return `undefined`** — the NAPI layer raises
+  `TypeError: Value is not undefined` on any other return value (e.g. `arr.push(...)`
+  returns a number). Wrap in a block body.
+- **`runMontyAsync` masks runtime errors**: `snapshot.resume({returnValue})` sits inside
+  its `try`, so a genuine `MontyRuntimeError` raised by subsequent Python code is caught
+  and re-injected into the already-consumed snapshot, surfacing as the cryptic
+  `Invalid exception type: 'MontyRuntimeError'`. Our runner must own the pause/resume
+  loop instead of using `runMontyAsync`.
+
+### State, persistence, REPL
+
+- `MontyRepl` — incremental no-replay REPL: `repl.feed(code)` executes snippets against a
+  **persistent heap + namespace** (smolagents-style step persistence).
+- Everything serializes to bytes: `Monty.dump/load` (parsed code), `MontySnapshot.dump/load`
+  (paused execution — resumable *in a different process*; durable-execution style),
+  `MontyRepl.dump/load` (whole session state).
+
+### Limits and safety
+
+```ts
+limits: { maxAllocations, maxDurationSecs, maxMemory, maxRecursionDepth /*default 1000*/, gcInterval }
+```
+
+- `MountDir(virtualPath, hostPath, { mode: 'read-only'|'read-write'|'overlay', writeBytesLimit })`
+  — overlay (default) captures writes in memory.
+- Errors: `MontySyntaxError`, `MontyRuntimeError` (`.traceback()` with real frames),
+  `MontyTypingError` (`.displayDiagnostics()` — static type checking via `ty`).
+
+## Language coverage
+
+Supports a reasonable Python subset: functions, exceptions/tracebacks, kwargs, f-strings,
+async/await of external functions, comprehensions, a small stdlib whitelist
+(`sys`, `os`, `typing`, `asyncio`, `re`, `datetime`, `json`). **Not yet**: class
+definitions, match statements, third-party packages, most of the stdlib. One pending
+external call at a time (no in-VM parallel tool calls).
+
+## Implications for our design
+
+- The `MontySnapshot`/`MontyNameLookup` loop lets us intercept every tool call with full
+  control (logging, permissions, exceptions back into Python).
+- `MontyRepl.dump()` per pi session gives durable, branch-safe namespace persistence.
+- Type checking pre-execution (`typeCheckPrefixCode` with our tool stubs) can reject bad
+  code before running it and return `ty` diagnostics to the model.
+- No classes/match yet → keep generated-code expectations modest; say so in the prompt.

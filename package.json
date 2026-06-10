@@ -1,0 +1,22 @@
+{
+  "name": "multi-tool",
+  "version": "1.0.0",
+  "description": "Code-mode tool for the pi coding agent: a sandboxed Python meta-tool (via @pydantic/monty) that lets the agent write code against host tools and build ephemeral code tools",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "smoke": "tsx examples/smoke.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@pydantic/monty": "^0.0.18"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.2",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  },
+  "type": "module"
+}
