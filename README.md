@@ -28,12 +28,19 @@ for the evidence (Cloudflare Code Mode, Anthropic programmatic tool calling, smo
 
 ## What you get
 
-Installing registers a `code` tool. The model gets the built-in host tools
-(`read_file`, `list_files` rooted at the workspace, `http_get` host-side) rendered as
-Python stubs, plus `save_tool`/`delete_tool`/`list_saved_tools`/`read_tool` for
-building its own toolbox in `.pi/code-tools/*.py` (plain, user-editable Python files
-that auto-load into future sessions). Variables persist across calls; state rides in
-tool-result `details`, so it survives session restore and branching.
+Installing registers a `code` tool. The workspace is **mounted read-only at
+`/workspace`**, so code reads files with plain `open()`/`pathlib` (monty enforces
+read-only mode, symlink-escape and `..`-traversal protection). Host tools
+(`list_files`, `http_get` host-side) are rendered as Python stubs, plus
+`save_tool`/`delete_tool`/`list_saved_tools`/`read_tool` for building a toolbox in
+`.pi/code-tools/*.py` (plain, user-editable Python files that auto-load into future
+sessions). Variables persist across calls; state rides in tool-result `details`, so
+it survives session restore and branching.
+
+Code is **statically type-checked before execution** (monty's bundled `ty`) against
+typed stubs of every host tool — wrong argument types, bad methods on tool results,
+and undefined names come back as compiler diagnostics *before any side effects run*,
+instead of as tracebacks after three tool calls already happened.
 
 ## Example pi session
 
@@ -76,6 +83,8 @@ import { createPythonExtension } from 'pi-monty/pi'
 
 export default createPythonExtension({
   toolName: 'code',              // rename if your model responds better to e.g. 'python'
+  mountWorkspace: true,          // false: no /workspace mount, read_file tool instead
+  typeCheck: true,               // false: skip the pre-execution type-check gate
   tools: [
     {
       name: 'query_db',
@@ -112,7 +121,7 @@ side effects never repeat). `ToolStore` adds the saved-tools layer.
 
 ```bash
 npm install
-npm test            # vitest (54 tests)
+npm test            # vitest (59 tests)
 npm run typecheck
 npm run smoke       # verifies monty primitives on your machine
 npx tsx examples/demo.ts
@@ -123,7 +132,7 @@ npx tsx examples/demo.ts
 ```
 src/core/    runner.ts    CodeRunner: owns monty's start/resume loop; tool dispatch,
                           tracebacks, limits, abort, per-call traces
-             registry.ts  ToolRegistry + Python stub rendering + prompt rules
+             registry.ts  ToolRegistry + Python/typecheck stub rendering + prompt rules
              builtins.ts  read_file / list_files / http_get starter tools
              session.ts   Persistent state via transcript replay + tool-call cache
              toolstore.ts Agent-saved tools as plain .py files + manage-from-sandbox

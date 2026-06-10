@@ -61,7 +61,11 @@ describe('host tools', () => {
         {
           name: 'record',
           description: 'Record args.',
-          params: [],
+          params: [
+            { name: 'a', type: 'int' },
+            { name: 'b', type: 'str' },
+            { name: 'flag', type: 'bool', optional: true },
+          ],
           returns: 'None',
           execute: (args, kwargs) => {
             seen.push([args, kwargs])
@@ -97,7 +101,7 @@ describe('error paths', () => {
     const result = await new CodeRunner().run('def f(:')
     expect(result.ok).toBe(false)
     expect(result.errorKind).toBe('syntax')
-    expect(result.error).toContain('SyntaxError')
+    expect(result.error).toMatch(/invalid-syntax|SyntaxError/)
   })
 
   it('reports runtime errors with a traceback', async () => {
@@ -116,11 +120,29 @@ describe('error paths', () => {
     expect(result.calls).toHaveLength(1)
   })
 
-  it('raises NameError for unknown functions', async () => {
+  it('rejects unknown names at type-check time', async () => {
     const result = await new CodeRunner().run('mystery(1)')
     expect(result.ok).toBe(false)
-    expect(result.error).toContain('NameError')
+    expect(result.errorKind).toBe('typing')
     expect(result.error).toContain('mystery')
+  })
+
+  it('raises NameError at runtime with typeCheck disabled', async () => {
+    const result = await new CodeRunner({ typeCheck: false }).run('mystery(1)')
+    expect(result.ok).toBe(false)
+    expect(result.errorKind).toBe('runtime')
+    expect(result.error).toContain('NameError')
+  })
+
+  it('catches bad types on tool results before execution', async () => {
+    const runner = new CodeRunner({ tools: [double] })
+    const result = await runner.run('x = double(2)\nprint(x)\nx.upper()')
+    expect(result.ok).toBe(false)
+    expect(result.errorKind).toBe('typing')
+    expect(result.error).toContain('upper')
+    expect(result.error).toContain('tool.py:3:') // adjusted past the stub prefix
+    expect(result.calls).toHaveLength(0) // nothing executed
+    expect(result.stdout).toBe('')
   })
 
   it('surfaces host tool failures as catchable Python exceptions', async () => {

@@ -145,8 +145,11 @@ The general-purpose payoff: the agent builds its own toolbox.
   rendering all stubs (Anthropic MCP-article pattern) once tool count grows
 - **Bridge pi's own tools / MCP servers** into the registry automatically (the
   Cloudflare conversion pattern: schema → typed stub)
-- **Type-check gate**: `typeCheckPrefixCode` with generated stubs to reject bad code
-  pre-execution and return `ty` diagnostics to the model
+- ~~**Type-check gate**~~ ✅ shipped in 0.2.0: generated raising-body stubs as
+  `typeCheckPrefixCode`; ty diagnostics returned pre-execution with adjusted line
+  numbers; missing-runtime-builtin declarations (docs/research/03-monty.md)
+- ~~**Workspace mount**~~ ✅ shipped in 0.2.0: read-only `/workspace` MountDir
+  replaces the `read_file` host tool (monty enforces read-only + escape protection)
 - **Approval gates**: serialize the `MontySnapshot` at a sensitive call, ask the user,
   resume — durable human-in-the-loop mid-script
 - **PII tokenization** at the bridge boundary

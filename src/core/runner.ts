@@ -19,6 +19,20 @@ const DEFAULT_LIMITS: Required<Pick<RunLimits, 'maxDurationSecs' | 'maxMemory'>>
 
 const DEFAULT_MAX_STDOUT_BYTES = 1024 * 1024
 
+/**
+ * Names monty provides at runtime that its bundled type checker doesn't know
+ * (verified on 0.0.18). Declared as Any in the typecheck prefix so valid code
+ * using them isn't rejected; prune as monty's ty config catches up.
+ */
+const TY_MISSING_BUILTINS = [
+  'open',
+  'bytearray',
+  'PermissionError',
+  'FileNotFoundError',
+  'IsADirectoryError',
+  'NotADirectoryError',
+]
+
 /** Monty names calls through a resolved value after the JS function's `name`. */
 function namedPlaceholder(name: string): () => undefined {
   const fn = () => undefined
@@ -30,6 +44,13 @@ export interface CodeRunnerOptions {
   tools?: HostTool[] | ToolRegistry
   /** Default limits for every run; overridable per run. */
   limits?: RunLimits
+  /**
+   * Statically type-check code before executing it (monty's built-in `ty`),
+   * with registered tools and inputs declared as typed stubs. Catches wrong
+   * argument types, bad methods on tool results, and undefined names before
+   * any side effects run. Default true.
+   */
+  typeCheck?: boolean
 }
 
 /**
@@ -44,9 +65,11 @@ export interface CodeRunnerOptions {
 export class CodeRunner {
   readonly registry: ToolRegistry
   private readonly limits: RunLimits
+  private readonly typeCheck: boolean
 
   constructor(options: CodeRunnerOptions = {}) {
     this.limits = { ...DEFAULT_LIMITS, ...options.limits }
+    this.typeCheck = options.typeCheck ?? true
     this.registry =
       options.tools instanceof ToolRegistry ? options.tools : new ToolRegistry(options.tools)
   }
@@ -73,14 +96,42 @@ export class CodeRunner {
       // must not return a value: the native layer raises TypeError otherwise
     }
 
+    const scriptName = options.scriptName ?? 'tool.py'
+
+    // The type checker doesn't know tools or declared inputs; feed both in as
+    // prefix code, then shift reported line numbers back to the user's code.
+    const inputNames = options.inputs ? Object.keys(options.inputs) : []
+    const prefixLines: string[] = []
+    if (this.typeCheck) {
+      prefixLines.push('from typing import Any')
+      for (const name of [...TY_MISSING_BUILTINS, ...inputNames]) {
+        prefixLines.push(`${name}: Any = None`)
+      }
+      const stubs = this.registry.renderTypeStubs()
+      if (stubs) prefixLines.push(stubs)
+    }
+    const prefix = prefixLines.join('\n')
+    const prefixLineCount = prefix === '' ? 0 : prefix.split('\n').length
+
     const fail = (
       errorKind: NonNullable<RunResult['errorKind']>,
       error: string,
     ): RunResult => ({ ok: false, output: undefined, stdout, stdoutTruncated, error, errorKind, calls })
 
+    const adjustLines = (diagnostics: string): string =>
+      diagnostics.replace(
+        new RegExp(`${scriptName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:(\\d+):`, 'g'),
+        (match, line) => `${scriptName}:${Number(line) - prefixLineCount}:`,
+      )
+
     const pythonFailure = (e: unknown): RunResult => {
       if (e instanceof MontyRuntimeError) return fail('runtime', e.display('traceback'))
-      if (e instanceof MontyTypingError) return fail('typing', e.displayDiagnostics('concise'))
+      if (e instanceof MontyTypingError) {
+        const diagnostics = adjustLines(e.displayDiagnostics('concise'))
+        // with typeCheck on, parse errors surface as ty invalid-syntax diagnostics
+        const kind = diagnostics.includes('error[invalid-syntax]') ? 'syntax' : 'typing'
+        return fail(kind, diagnostics)
+      }
       if (e instanceof MontySyntaxError) return fail('syntax', e.display('type-msg'))
       throw e
     }
@@ -88,8 +139,10 @@ export class CodeRunner {
     let monty: Monty
     try {
       monty = new Monty(code, {
-        scriptName: options.scriptName ?? 'tool.py',
-        inputs: options.inputs ? Object.keys(options.inputs) : undefined,
+        scriptName,
+        inputs: inputNames.length > 0 ? inputNames : undefined,
+        typeCheck: this.typeCheck,
+        typeCheckPrefixCode: prefix || undefined,
       })
     } catch (e) {
       return pythonFailure(e)

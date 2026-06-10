@@ -60,6 +60,17 @@ pause/resume protocol, in-process.
   `Session` replays the transcript with a tool-call cache instead. Revisit when monty
   extends FeedOptions.
 - `dir()` is not among the supported builtins.
+- **Type-check prefix rules** (`typeCheckPrefixCode`): stub bodies must `raise` (`...`
+  bodies trip ty's empty-body rule); optional params can't default to `...` outside
+  .pyi files (use `| None = None`); declared `inputs` are unknown to ty; and ty's
+  builtins model lacks several runtime names — `open`, `bytearray`,
+  `PermissionError`, `FileNotFoundError`, `IsADirectoryError`, `NotADirectoryError` —
+  all of which we declare as `Any` in the prefix. With typeCheck on, parse errors
+  surface as `MontyTypingError` `invalid-syntax` diagnostics, not `MontySyntaxError`.
+- **Mounts**: `open()`, `with`, `.read()/.readlines()`, and `pathlib.Path.read_text()`
+  work; file objects are NOT iterable, `json.load` is missing (use
+  `json.loads(text)`), and `os.listdir`/`os.walk` don't exist. Read-only mode blocks
+  writes, symlink escapes, and `..` traversal (all verified).
 - **`runMontyAsync` masks runtime errors**: `snapshot.resume({returnValue})` sits inside
   its `try`, so a genuine `MontyRuntimeError` raised by subsequent Python code is caught
   and re-injected into the already-consumed snapshot, surfacing as the cryptic

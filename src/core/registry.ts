@@ -34,6 +34,22 @@ export class ToolRegistry {
   renderStubs(): string {
     return this.list().map(renderToolStub).join('\n\n')
   }
+
+  /**
+   * Compact stubs for monty's static type checker (`typeCheckPrefixCode`).
+   * Bodies must raise (`...` bodies trip ty's empty-body rule) and optional
+   * params default to None (`= ...` is only legal in .pyi stubs).
+   */
+  renderTypeStubs(): string {
+    return this.list()
+      .map((tool) => {
+        const params = tool.params
+          .map((p) => (p.optional ? `${p.name}: ${p.type} | None = None` : `${p.name}: ${p.type}`))
+          .join(', ')
+        return `def ${tool.name}(${params}) -> ${tool.returns}:\n    raise NotImplementedError`
+      })
+      .join('\n')
+  }
 }
 
 /**

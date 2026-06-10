@@ -49,10 +49,36 @@ describe('python pi extension', () => {
     expect(tool.name).toBe('python')
   })
 
-  it('includes builtin stubs by default', async () => {
+  it('mounts the workspace and includes builtin stubs by default', async () => {
     const { tool } = await loadExtension({ root: '/tmp' })
-    expect(tool.description).toContain('def read_file(')
+    expect(tool.description).toContain('def list_files(')
     expect(tool.description).toContain('def http_get(')
+    // the read-only mount replaces read_file with plain open()
+    expect(tool.description).not.toContain('def read_file(')
+    expect(tool.description).toContain('/workspace')
+  })
+
+  it('provides read_file when the mount is disabled', async () => {
+    const { tool } = await loadExtension({ root: '/tmp', mountWorkspace: false })
+    expect(tool.description).toContain('def read_file(')
+    expect(tool.description).not.toContain('/workspace')
+  })
+
+  it('reads workspace files through the mount with open()', async () => {
+    const { tool } = await loadExtension({ root: process.cwd() })
+    const result = await tool.execute('t1', {
+      code: 'import json\njson.loads(open("/workspace/package.json").read())["name"]',
+    })
+    expect(result.content[0].text).toBe('=> "pi-monty"')
+  })
+
+  it('blocks writes through the mount', async () => {
+    const { tool } = await loadExtension({ root: process.cwd() })
+    const result = await tool.execute('t1', {
+      code: 'open("/workspace/evil.txt", "w").write("x")',
+    })
+    expect(result.details.ok).toBe(false)
+    expect(result.content[0].text).toContain('PermissionError')
   })
 
   it('runs code, returns the result, and persists state across calls', async () => {
@@ -94,7 +120,7 @@ describe('python pi extension', () => {
     await tool.execute('t1', { code: 'x = 1' })
     const result = await tool.execute('t2', { code: 'x', reset: true })
     expect(result.details.ok).toBe(false)
-    expect(result.content[0].text).toContain('NameError')
+    expect(result.content[0].text).toContain('not defined')
   })
 
   it('restores session state from branch details on session_start', async () => {
@@ -136,6 +162,6 @@ describe('python pi extension', () => {
 
     const result = await tool.execute('t2', { code: 'x' })
     expect(result.details.ok).toBe(false)
-    expect(result.content[0].text).toContain('NameError')
+    expect(result.content[0].text).toContain('not defined')
   })
 })

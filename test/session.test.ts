@@ -52,7 +52,8 @@ describe('Session', () => {
 
   it('rolls back failed snippets completely', async () => {
     const { tool, executions } = spyTool()
-    const session = new Session({ tools: [tool] })
+    // typeCheck off: this test probes an undefined name at runtime on purpose
+    const session = new Session({ tools: [tool], typeCheck: false })
     await session.run('x = 1')
 
     const failed = await session.run('y = 2\nr = fetch_record("oops")\n1 / 0')
@@ -98,6 +99,6 @@ describe('Session', () => {
     session.reset()
     const result = await session.run('x')
     expect(result.ok).toBe(false)
-    expect(result.error).toContain('NameError')
+    expect(result.error).toContain('not defined')
   })
 })

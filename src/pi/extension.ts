@@ -16,6 +16,7 @@ import {
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 import { join } from 'node:path'
+import { MountDir } from '@pydantic/monty'
 import { PYTHON_TOOL_RULES, ToolRegistry } from '../core/registry.js'
 import { createBuiltinTools } from '../core/builtins.js'
 import { Session } from '../core/session.js'
@@ -35,8 +36,16 @@ export interface PythonExtensionOptions {
   tools?: HostTool[]
   /** Workspace root for the built-in file tools. Default: process.cwd(). */
   root?: string
-  /** Disable the built-in read_file/list_files/http_get tools. */
+  /** Disable the built-in list_files/http_get tools. */
   noBuiltins?: boolean
+  /**
+   * Mount the workspace read-only at /workspace so code reads files with
+   * plain open()/pathlib. When disabled, a read_file host tool is provided
+   * instead. Default true.
+   */
+  mountWorkspace?: boolean
+  /** Pre-execution static type checking with tool stubs. Default true. */
+  typeCheck?: boolean
   /**
    * Directory for agent-saved tools, or false to disable saving.
    * Default: <root>/.pi/code-tools.
@@ -70,9 +79,17 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
   return async (pi: ExtensionAPI) => {
     const toolName = options.toolName ?? DEFAULT_TOOL_NAME
     const root = options.root ?? process.cwd()
+    const mountWorkspace = options.mountWorkspace ?? true
+    const mount = mountWorkspace
+      ? new MountDir('/workspace', root, { mode: 'read-only' })
+      : undefined
     const registry = new ToolRegistry(options.tools)
     if (!options.noBuiltins) {
-      for (const tool of createBuiltinTools({ root })) registry.add(tool)
+      for (const tool of createBuiltinTools({ root })) {
+        // the mount replaces read_file with plain open()
+        if (mountWorkspace && tool.name === 'read_file') continue
+        registry.add(tool)
+      }
     }
     const store =
       options.toolStore === false ? null : new ToolStore(options.toolStore ?? join(root, '.pi', 'code-tools'))
@@ -81,7 +98,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
     }
     const savedSummary = store ? await store.renderSummary() : ''
 
-    const sessionOptions = { tools: registry, limits: options.limits }
+    const sessionOptions = { tools: registry, limits: options.limits, typeCheck: options.typeCheck }
     // null until first use: a fresh session loads saved tools as a prelude,
     // which is async, so creation happens lazily in execute().
     let session: Session | null = null
@@ -140,6 +157,11 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         '',
         'Rules:',
         PYTHON_TOOL_RULES,
+        ...(mountWorkspace
+          ? [
+              `- The workspace is mounted READ-ONLY at /workspace: read files with open("/workspace/<path>") or pathlib (paths from list_files are relative to it). Files are not iterable — use .read()/.readlines(); parse JSON with json.loads(text). Writes raise PermissionError; change real files with the regular edit/write tools.`,
+            ]
+          : []),
       ].join('\n'),
       promptSnippet: `${toolName}: run sandboxed Python; host tools are callable as functions; state persists`,
       promptGuidelines: [
@@ -153,6 +175,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         let streamed = ''
         const result = await session.run(params.code, {
           signal,
+          mount,
           onPrint: (text) => {
             streamed += text
             onUpdate?.({

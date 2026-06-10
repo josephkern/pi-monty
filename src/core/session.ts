@@ -23,6 +23,8 @@ export interface SessionOptions {
   tools?: HostTool[] | ToolRegistry
   /** Default limits for every run (applied to the whole replayed script). */
   limits?: RunLimits
+  /** Pre-execution static type checking (see CodeRunnerOptions). Default true. */
+  typeCheck?: boolean
 }
 
 /**
@@ -43,6 +45,7 @@ export interface SessionOptions {
 export class Session {
   private readonly registry: ToolRegistry
   private readonly limits?: RunLimits
+  private readonly typeCheck?: boolean
   private snippets: Snippet[] = []
   private calls: CachedCall[] = []
   private stdout = ''
@@ -51,6 +54,7 @@ export class Session {
     this.registry =
       options.tools instanceof ToolRegistry ? options.tools : new ToolRegistry(options.tools)
     this.limits = options.limits
+    this.typeCheck = options.typeCheck
   }
 
   /** Number of successful snippets in the transcript. */
@@ -98,7 +102,7 @@ export class Session {
         }
       : undefined
 
-    const runner = new CodeRunner({ tools: wrapped, limits: this.limits })
+    const runner = new CodeRunner({ tools: wrapped, limits: this.limits, typeCheck: this.typeCheck })
     const result = await runner.run(combined, {
       ...options,
       onPrint,
