@@ -37,11 +37,16 @@ const greet: HostTool = {
 }
 
 describe('python pi extension', () => {
-  it('registers a python tool with stubs and rules in the description', async () => {
+  it('registers a code tool with stubs and rules in the description', async () => {
     const { tool } = await loadExtension({ tools: [greet], noBuiltins: true })
-    expect(tool.name).toBe('python')
+    expect(tool.name).toBe('code')
     expect(tool.description).toContain('def greet(name: str) -> str:')
     expect(tool.description).toContain('WITHOUT `await`')
+  })
+
+  it('honors a custom tool name', async () => {
+    const { tool } = await loadExtension({ toolName: 'python', noBuiltins: true })
+    expect(tool.name).toBe('python')
   })
 
   it('includes builtin stubs by default', async () => {
@@ -103,7 +108,7 @@ describe('python pi extension', () => {
       {
         sessionManager: {
           getBranch: () => [
-            { type: 'message', message: { toolName: 'python', details: first.details } },
+            { type: 'message', message: { toolName: 'code', details: first.details } },
           ],
         },
       },
@@ -111,5 +116,25 @@ describe('python pi extension', () => {
 
     const result = await tool.execute('t2', { code: 'kept' })
     expect(result.content[0].text).toBe('=> "hello again"')
+  })
+
+  it('restores state recorded under the legacy python tool name', async () => {
+    const { tool, handlers } = await loadExtension({ noBuiltins: true })
+    const first = await tool.execute('t1', { code: 'legacy = 7' })
+
+    const sessionStart = handlers.get('session_start')![0]
+    sessionStart(
+      {},
+      {
+        sessionManager: {
+          getBranch: () => [
+            { type: 'message', message: { toolName: 'python', details: first.details } },
+          ],
+        },
+      },
+    )
+
+    const result = await tool.execute('t2', { code: 'legacy' })
+    expect(result.content[0].text).toBe('=> 7')
   })
 })

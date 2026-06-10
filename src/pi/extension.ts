@@ -1,5 +1,5 @@
 /**
- * pi extension: a `python` code-mode tool backed by monty's sandboxed
+ * pi extension: a `code` code-mode tool backed by monty's sandboxed Python
  * interpreter. Host tools appear to the model as plain Python functions;
  * print() output streams back; variables persist across calls within a
  * session; session state rides in tool-result `details` so it survives
@@ -22,9 +22,17 @@ import { Session } from '../core/session.js'
 import { ToolStore } from '../core/toolstore.js'
 import type { HostTool, RunLimits } from '../core/types.js'
 
-const TOOL_NAME = 'python'
+const DEFAULT_TOOL_NAME = 'code'
+/** Older releases registered the tool as `python`; accept both when restoring. */
+const LEGACY_TOOL_NAMES = ['python']
 
 export interface PythonExtensionOptions {
+  /**
+   * Name the tool is registered under. Default 'code' — neutral across model
+   * families; a name like 'python' invites full-CPython assumptions monty
+   * can't meet.
+   */
+  toolName?: string
   /** Extra host tools beyond the built-ins. */
   tools?: HostTool[]
   /** Workspace root for the built-in file tools. Default: process.cwd(). */
@@ -62,6 +70,8 @@ const PythonParams = Type.Object({
 
 export function createPythonExtension(options: PythonExtensionOptions = {}) {
   return async (pi: ExtensionAPI) => {
+    const toolName = options.toolName ?? DEFAULT_TOOL_NAME
+    const restoreNames = new Set([toolName, ...LEGACY_TOOL_NAMES])
     const root = options.root ?? process.cwd()
     const registry = new ToolRegistry(options.tools)
     if (!options.noBuiltins) {
@@ -101,7 +111,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
       for (const entry of ctx.sessionManager.getBranch()) {
         if (entry.type === 'message') {
           const message = entry.message as { toolName?: string; details?: PythonDetails }
-          if (message.toolName === TOOL_NAME && message.details?.state) {
+          if (message.toolName && restoreNames.has(message.toolName) && message.details?.state) {
             state = message.details.state
           }
         }
@@ -110,8 +120,8 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
     })
 
     pi.registerTool({
-      name: TOOL_NAME,
-      label: 'Python',
+      name: toolName,
+      label: 'Code',
       description: [
         'Run Python in a sandboxed interpreter with host tools available as plain',
         'functions. Variables and functions persist across calls in this session.',
@@ -128,10 +138,9 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         'Rules:',
         PYTHON_TOOL_RULES,
       ].join('\n'),
-      promptSnippet:
-        'python: run sandboxed Python; host tools are callable as functions; state persists',
+      promptSnippet: `${toolName}: run sandboxed Python; host tools are callable as functions; state persists`,
       promptGuidelines: [
-        'Use python for multi-step tool workflows: loop/filter/aggregate in code and print only the result, instead of issuing many separate tool calls.',
+        `Use ${toolName} for multi-step tool workflows: loop/filter/aggregate in code and print only the result, instead of issuing many separate tool calls.`,
       ],
       parameters: PythonParams,
       async execute(_toolCallId, params, signal, onUpdate, _ctx) {

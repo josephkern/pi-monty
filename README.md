@@ -26,25 +26,56 @@ and aggregation happen inside the sandbox, and intermediate data never enters mo
 context — only what the code `print()`s. See `docs/research/01-code-mode-articles.md`
 for the evidence (Cloudflare Code Mode, Anthropic programmatic tool calling, smolagents).
 
-## Use with pi (development)
+## What you get
 
-```bash
-pi -e src/pi/extension.ts        # load straight from source, no build needed
+Installing registers a `code` tool. The model gets the built-in host tools
+(`read_file`, `list_files` rooted at the workspace, `http_get` host-side) rendered as
+Python stubs, plus `save_tool`/`delete_tool`/`list_saved_tools`/`read_tool` for
+building its own toolbox in `.pi/code-tools/*.py` (plain, user-editable Python files
+that auto-load into future sessions). Variables persist across calls; state rides in
+tool-result `details`, so it survives session restore and branching.
+
+## Example pi session
+
+```text
+$ pi
+> Use the code tool to fetch https://api.github.com/repos/pydantic/monty,
+  report the star count, and save a reusable tool gh_stars(repo) for next time.
+
+  ● Code
+    data = json.loads(http_get("https://api.github.com/repos/pydantic/monty"))
+    print(f"stars: {data['stargazers_count']}")
+    save_tool("gh_stars", '''
+    def gh_stars(repo):
+        return json.loads(http_get(f"https://api.github.com/repos/{repo}"))["stargazers_count"]
+    ''', "Return the GitHub star count for owner/repo.")
+
+pydantic/monty currently has 1,234 stars. I saved gh_stars(repo) for future use.
 ```
 
-This registers a `python` tool. The model gets the built-in host tools (`read_file`,
-`list_files` rooted at the workspace, `http_get` host-side) rendered as Python stubs,
-plus `save_tool`/`delete_tool`/`list_saved_tools`/`read_tool` for building its own
-toolbox in `.pi/code-tools/*.py` (plain, user-editable Python files that auto-load
-into future sessions). Variables persist across calls; state rides in tool-result
-`details`, so it survives session restore and branching.
+In a later session — no redefinition needed, `gh_stars` auto-loads:
 
-Custom host tools:
+```text
+> how many stars does josephkern/pi-monty have?
+
+  ● Code
+    gh_stars("josephkern/pi-monty")
+```
+
+Because the work happens in one sandboxed snippet, intermediate data (the full API
+response, loop iterations, file contents) never enters the model's context — only
+what the code prints comes back.
+
+## Configuration
+
+The default export works out of the box. For custom host tools or a different tool
+name, re-export from your own extension file (e.g. `.pi/extensions/code.ts`):
 
 ```ts
-import { createPythonExtension } from './src/pi/extension.js'
+import { createPythonExtension } from 'pi-monty/pi'
 
 export default createPythonExtension({
+  toolName: 'code',              // rename if your model responds better to e.g. 'python'
   tools: [
     {
       name: 'query_db',
@@ -56,6 +87,12 @@ export default createPythonExtension({
     },
   ],
 })
+```
+
+## Develop against this repo
+
+```bash
+pi -e src/pi/extension.ts        # load straight from source, no build needed
 ```
 
 ## Use as a library
@@ -75,7 +112,7 @@ side effects never repeat). `ToolStore` adds the saved-tools layer.
 
 ```bash
 npm install
-npm test            # vitest (52 tests)
+npm test            # vitest (54 tests)
 npm run typecheck
 npm run smoke       # verifies monty primitives on your machine
 npx tsx examples/demo.ts
@@ -90,7 +127,7 @@ src/core/    runner.ts    CodeRunner: owns monty's start/resume loop; tool dispa
              builtins.ts  read_file / list_files / http_get starter tools
              session.ts   Persistent state via transcript replay + tool-call cache
              toolstore.ts Agent-saved tools as plain .py files + manage-from-sandbox
-src/pi/      extension.ts pi adapter: `python` tool, streaming output, branch-safe state
+src/pi/      extension.ts pi adapter: `code` tool (configurable name), streaming output, branch-safe state
 ```
 
 Known monty 0.0.18 quirks we code around are documented in
