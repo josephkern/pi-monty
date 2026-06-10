@@ -48,11 +48,12 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "extensions"
   ],
   "pi": {
     "extensions": [
-      "./dist/pi/extension.js"
+      "./extensions/index.js"
     ]
   },
   "peerDependencies": {
