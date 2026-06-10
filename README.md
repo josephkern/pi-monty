@@ -1,4 +1,4 @@
-# multi-tool
+# pi-monty
 
 A code-mode meta-tool for agent harnesses: the agent writes sandboxed Python (via
 [@pydantic/monty](https://github.com/pydantic/monty)) that calls host tools as plain
@@ -8,6 +8,17 @@ harness: [pi](https://pi.dev).
 - **Plan**: [PLAN.md](PLAN.md) — M0–M5 (MVP) complete
 - **Research notes**: [docs/research/](docs/research/)
 
+## Install (as a pi package)
+
+```bash
+pi install npm:pi-monty        # once published to npm
+pi install /path/to/checkout   # or straight from a local clone (builds dist/ first: npm run build)
+```
+
+`@pydantic/monty` (including its platform-specific native binary) and `typebox` are
+regular npm `dependencies`, so pi's installer pulls them in automatically;
+`@earendil-works/pi-coding-agent` is a peer dependency satisfied by pi itself.
+
 ## Why
 
 LLMs compose code better than they compose chained JSON tool calls: loops, filtering,
@@ -15,11 +26,10 @@ and aggregation happen inside the sandbox, and intermediate data never enters mo
 context — only what the code `print()`s. See `docs/research/01-code-mode-articles.md`
 for the evidence (Cloudflare Code Mode, Anthropic programmatic tool calling, smolagents).
 
-## Use with pi
+## Use with pi (development)
 
 ```bash
-pi -e src/pi/extension.ts        # try it
-# or copy/symlink src/pi/extension.ts into .pi/extensions/
+pi -e src/pi/extension.ts        # load straight from source, no build needed
 ```
 
 This registers a `python` tool. The model gets the built-in host tools (`read_file`,
