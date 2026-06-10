@@ -20,7 +20,7 @@
     "monty",
     "code-execution"
   ],
-  "author": "jk <timetrap@gmail.com>",
+  "author": "Joseph Kern <joseph.a.kern@gmail.com>",
   "license": "MIT",
   "dependencies": {
     "@pydantic/monty": "^0.0.18",
@@ -57,5 +57,13 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/josephkern/pi-monty.git"
+  },
+  "homepage": "https://github.com/josephkern/pi-monty#readme",
+  "bugs": {
+    "url": "https://github.com/josephkern/pi-monty/issues"
   }
 }
