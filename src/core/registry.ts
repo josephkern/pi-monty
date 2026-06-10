@@ -91,13 +91,32 @@ export function renderToolStub(tool: HostTool): string {
 /**
  * Ground rules for the model writing sandboxed Python, reflecting monty's
  * verified behavior (docs/research/03-monty.md). Include alongside the stubs.
+ * Pass the result of `probeImportableModules()` so the import list reflects
+ * the installed interpreter rather than a guess.
  */
-export const PYTHON_TOOL_RULES = `\
+export function renderPythonToolRules(importableModules: string[]): string {
+  return `\
 - Call tools as plain functions, WITHOUT \`await\`.
 - Use print() to surface anything you need to see; printed output is returned to you.
 - The value of the last top-level expression is returned as the result (expressions
   inside if/try blocks are not).
-- Class definitions and match statements are not supported; only a small stdlib subset
-  (re, json, datetime, math) is importable.
+- Imports: ONLY these modules exist: ${importableModules.join(', ')}. Anything else
+  (e.g. time, random, collections, requests, numpy) raises ModuleNotFoundError —
+  there are no third-party packages.
+- Class definitions and match statements are not supported.
 - Tool failures raise normal Python exceptions you can catch (e.g. ValueError,
   FileNotFoundError, OSError).`
+}
+
+/** Rules rendered with monty 0.0.18's known module list (prefer probing). */
+export const PYTHON_TOOL_RULES = renderPythonToolRules([
+  'json',
+  're',
+  'datetime',
+  'math',
+  'os',
+  'sys',
+  'typing',
+  'asyncio',
+  'pathlib',
+])

@@ -17,7 +17,8 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 import { join } from 'node:path'
 import { MountDir } from '@pydantic/monty'
-import { PYTHON_TOOL_RULES, ToolRegistry } from '../core/registry.js'
+import { probeImportableModules } from '../core/capabilities.js'
+import { renderPythonToolRules, ToolRegistry } from '../core/registry.js'
 import { createBuiltinTools } from '../core/builtins.js'
 import { Session } from '../core/session.js'
 import { ToolStore } from '../core/toolstore.js'
@@ -168,7 +169,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
           : []),
         '',
         'Rules:',
-        PYTHON_TOOL_RULES,
+        renderPythonToolRules(probeImportableModules()),
         ...(mountWorkspace
           ? [
               `- The workspace is mounted READ-ONLY at /workspace: read files with open("/workspace/<path>") or pathlib (paths from list_files are relative to it). Files are not iterable — use .read()/.readlines(); parse JSON with json.loads(text). Writes raise PermissionError; change real files with the regular edit/write tools.`,

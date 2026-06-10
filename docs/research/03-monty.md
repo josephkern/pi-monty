@@ -99,10 +99,13 @@ limits: { maxAllocations, maxDurationSecs, maxMemory, maxRecursionDepth /*defaul
 ## Language coverage
 
 Supports a reasonable Python subset: functions, exceptions/tracebacks, kwargs, f-strings,
-async/await of external functions, comprehensions, a small stdlib whitelist
-(`sys`, `os`, `typing`, `asyncio`, `re`, `datetime`, `json`). **Not yet**: class
-definitions, match statements, third-party packages, most of the stdlib. One pending
-external call at a time (no in-VM parallel tool calls).
+async/await of external functions, comprehensions. **Importable modules (probed on
+0.0.18)**: `json`, `re`, `datetime`, `math`, `os`, `sys`, `typing`, `asyncio`,
+`pathlib` — and nothing else (`time`, `random`, `collections`, `itertools`, etc. all
+raise ModuleNotFoundError; ty also flags them pre-execution as `unresolved-import`).
+We probe at extension startup (`probeImportableModules`) and render the live list into
+the prompt. **Not yet**: class definitions, match statements, third-party packages.
+One pending external call at a time (no in-VM parallel tool calls).
 
 ## Implications for our design
 

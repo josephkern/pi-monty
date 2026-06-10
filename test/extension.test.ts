@@ -44,6 +44,15 @@ describe('python pi extension', () => {
     expect(tool.description).toContain('WITHOUT `await`')
   })
 
+  it('lists the actually-importable modules in the rules', async () => {
+    const { tool } = await loadExtension({ noBuiltins: true })
+    expect(tool.description).toContain('ONLY these modules exist:')
+    expect(tool.description).toMatch(/exist:.*\bjson\b/)
+    expect(tool.description).toMatch(/exist:.*\bpathlib\b/)
+    // time isn't importable in monty 0.0.18 — it must only appear as a counterexample
+    expect(tool.description).not.toMatch(/exist:[^\n]*\btime\b/)
+  })
+
   it('honors a custom tool name', async () => {
     const { tool } = await loadExtension({ toolName: 'python', noBuiltins: true })
     expect(tool.name).toBe('python')
