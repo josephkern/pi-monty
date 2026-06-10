@@ -106,13 +106,25 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
 
     async function freshSession(): Promise<Session> {
       const fresh = new Session(sessionOptions)
-      const prelude = store ? await store.prelude() : ''
-      if (prelude) {
-        const loaded = await fresh.run(prelude)
-        if (!loaded.ok) {
-          preludeNote = `[note: loading saved tools failed, continuing without them]\n${loaded.error}\n\n`
-          fresh.reset()
+      if (!store) return fresh
+      // Load saved tools one at a time so a malformed file (e.g. written
+      // directly instead of via save_tool) skips just that tool. Two passes:
+      // a tool referencing one that sorts after it loads on the retry.
+      const loadEach = async (tools: { name: string; code: string }[]) => {
+        const failed: { name: string; code: string; error: string }[] = []
+        for (const saved of tools) {
+          const loaded = await fresh.run(saved.code)
+          if (!loaded.ok) {
+            failed.push({ ...saved, error: (loaded.error ?? '').split('\n')[0] })
+          }
         }
+        return failed
+      }
+      let pending = await loadEach(await store.list())
+      if (pending.length > 0) pending = await loadEach(pending)
+      if (pending.length > 0) {
+        const skipped = pending.map((p) => `${p.name} (${p.error})`).join('; ')
+        preludeNote = `[note: skipped saved tool(s) that failed to load: ${skipped}]\n\n`
       }
       return fresh
     }
@@ -166,7 +178,12 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
       promptSnippet: `${toolName}: run sandboxed Python; host tools are callable as functions; state persists`,
       promptGuidelines: [
         `Use ${toolName} for multi-step tool workflows: loop/filter/aggregate in code and print only the result, instead of issuing many separate tool calls.`,
-        `Functions listed in the ${toolName} tool description (read_file, http_get, save_tool, and any saved functions) are NOT standalone tools — they only exist inside ${toolName}'s Python environment. To use one, call ${toolName} with code that invokes it.`,
+        `Functions listed in the ${toolName} tool description (list_files, http_get, save_tool, and any saved functions) are NOT standalone tools — they only exist inside ${toolName}'s Python environment. To use one, call ${toolName} with code that invokes it.`,
+        ...(store
+          ? [
+              `To create a reusable saved tool, call save_tool(name, code, description) inside ${toolName} — it validates the code. Do not write files into .pi/code-tools directly.`,
+            ]
+          : []),
       ],
       parameters: PythonParams,
       async execute(_toolCallId, params, signal, onUpdate, _ctx) {

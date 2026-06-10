@@ -92,6 +92,31 @@ describe('saved tools through the pi extension', () => {
     expect(result.content[0].text).toBe('=> "HI!"')
   })
 
+  it('skips a malformed saved-tool file without losing the others', async () => {
+    // simulate an agent writing files directly instead of using save_tool
+    const { writeFile, mkdir } = await import('node:fs/promises')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'broken.py'), '# Bad tool.\ndef broken(:\n')
+    await writeFile(join(dir, 'shout.py'), '# Good tool.\ndef shout(t):\n    return t.upper()\n')
+
+    const tool = await makeExtensionTool({ toolStore: dir })
+    const result = await tool.execute('t1', { code: 'shout("ok")' })
+    expect(result.content[0].text).toContain('skipped saved tool(s)')
+    expect(result.content[0].text).toContain('broken')
+    expect(result.content[0].text).toContain('=> "OK"')
+  })
+
+  it('loads saved tools that depend on later-sorting tools via the retry pass', async () => {
+    const { writeFile, mkdir } = await import('node:fs/promises')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'a_user.py'), '# Uses z_helper.\ndef a_user(x):\n    return z_helper(x) + 1\n')
+    await writeFile(join(dir, 'z_helper.py'), '# Helper.\ndef z_helper(x):\n    return x * 10\n')
+
+    const tool = await makeExtensionTool({ toolStore: dir })
+    const result = await tool.execute('t1', { code: 'a_user(4)' })
+    expect(result.content[0].text).toBe('=> 41')
+  })
+
   it('reset reloads tools saved earlier in the same session', async () => {
     const tool = await makeExtensionTool({ toolStore: dir })
     await tool.execute('t1', {
