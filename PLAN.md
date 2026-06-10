@@ -124,6 +124,10 @@ verifying external functions, pause/resume, REPL dump/load, tracebacks, limits.
   `ctx.sessionManager.getBranch()` on `session_start` — branch-safe
 - typechecked against the real `@earendil-works/pi-coding-agent` types; tested via a
   mock ExtensionAPI; run live with `pi -e src/pi/extension.ts`
+- **live-verified 2026-06-10** with `pi --print -t python` against a local model:
+  multi-step code-mode task (list_files + read_file + compute in one snippet), then
+  the full M5 loop — agent wrote/tested/saved `slugify` via `save_tool`, and a fresh
+  pi process auto-loaded and used it without defining it
 
 ### M5 — Ephemeral code tools ("skills") ✅
 The general-purpose payoff: the agent builds its own toolbox.
