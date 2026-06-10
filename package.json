@@ -1,6 +1,6 @@
 {
   "name": "pi-monty",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Code-mode tool for the pi coding agent: a sandboxed Python meta-tool (via @pydantic/monty) that lets the agent write code against host tools and build ephemeral code tools",
   "main": "./dist/index.js",
   "scripts": {
