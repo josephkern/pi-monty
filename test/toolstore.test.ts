@@ -133,7 +133,8 @@ describe('saved tools through the pi extension', () => {
       mountWorkspace: true,
     })
     const result = await tool.execute('t1', { code: 'pkg_name()' })
-    expect(result.content[0].text).toBe('=> "pi-monty"')
+    const { default: pkg } = await import('../package.json', { with: { type: 'json' } })
+    expect(result.content[0].text).toBe(`=> "${pkg.name}"`)
   })
 
   it('reset reloads tools saved earlier in the same session', async () => {

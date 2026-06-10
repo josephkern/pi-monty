@@ -1,4 +1,4 @@
-# pi-monty
+# pi-code-tool
 
 A code-mode meta-tool for agent harnesses: the agent writes sandboxed Python (via
 [@pydantic/monty](https://github.com/pydantic/monty)) that calls host tools as plain
@@ -11,7 +11,7 @@ harness: [pi](https://pi.dev).
 ## Install (as a pi package)
 
 ```bash
-pi install npm:pi-monty        # once published to npm
+pi install npm:pi-code-tool
 pi install /path/to/checkout   # or straight from a local clone (builds dist/ first: npm run build)
 ```
 
@@ -63,10 +63,10 @@ pydantic/monty currently has 1,234 stars. I saved gh_stars(repo) for future use.
 In a later session — no redefinition needed, `gh_stars` auto-loads:
 
 ```text
-> how many stars does josephkern/pi-monty have?
+> how many stars does josephkern/pi-code-tool have?
 
   ● Code
-    gh_stars("josephkern/pi-monty")
+    gh_stars("josephkern/pi-code-tool")
 ```
 
 Because the work happens in one sandboxed snippet, intermediate data (the full API
@@ -79,7 +79,7 @@ The default export works out of the box. For custom host tools or a different to
 name, re-export from your own extension file (e.g. `.pi/extensions/code.ts`):
 
 ```ts
-import { createPythonExtension } from 'pi-monty/pi'
+import { createPythonExtension } from 'pi-code-tool/pi'
 
 export default createPythonExtension({
   toolName: 'code',              // rename if your model responds better to e.g. 'python'

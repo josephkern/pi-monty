@@ -1,4 +1,4 @@
-# multi-tool — MVP plan
+# pi-code-tool — MVP plan
 
 A general-purpose **code-mode tool** for agent harnesses (first target: [pi](https://pi.dev)),
 backed by [@pydantic/monty](https://github.com/pydantic/monty)'s sandboxed Python

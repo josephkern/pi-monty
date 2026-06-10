@@ -78,11 +78,12 @@ describe('python pi extension', () => {
     const result = await tool.execute('t1', {
       code: 'import json\njson.loads(open("/workspace/package.json").read())["name"]',
     })
-    expect(result.content[0].text).toBe('=> "pi-monty"')
+    const { default: pkg } = await import('../package.json', { with: { type: 'json' } })
+    expect(result.content[0].text).toBe(`=> "${pkg.name}"`)
   })
 
   it('falls back to read_file when the mount root is missing', async () => {
-    const { tool } = await loadExtension({ root: '/nonexistent-dir-for-pi-monty-test' })
+    const { tool } = await loadExtension({ root: '/nonexistent-dir-for-pi-code-tool-test' })
     expect(tool.description).toContain('def read_file(')
     expect(tool.description).not.toContain('/workspace')
   })
