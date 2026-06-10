@@ -98,7 +98,22 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
     const store =
       options.toolStore === false ? null : new ToolStore(options.toolStore ?? join(root, '.pi', 'code-tools'))
     if (store) {
-      for (const tool of store.hostTools((name) => registry.has(name))) registry.add(tool)
+      // saved code must work in a future session, not just this one: run it
+      // in an isolated session (other saved tools loaded, current session's
+      // imports/variables absent) before accepting it. The probe needs its
+      // own MountDir — the suspended outer run still holds the shared one,
+      // and monty rejects a mount attached to two runs at once.
+      const validate = async (code: string): Promise<string | null> => {
+        const probeMount = mount
+          ? new MountDir('/workspace', root, { mode: 'read-only' })
+          : undefined
+        const probe = await freshSession({ quiet: true, mount: probeMount })
+        const result = await probe.run(code, { mount: probeMount })
+        return result.ok ? null : ((result.error ?? 'unknown error').split('\n')[0] ?? null)
+      }
+      for (const tool of store.hostTools((name) => registry.has(name), validate)) {
+        registry.add(tool)
+      }
     }
     const savedSummary = store ? await store.renderSummary() : ''
 
@@ -113,7 +128,10 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
     // set when state came from a previous conversation and hasn't run yet
     let restoredUnverified = false
 
-    async function freshSession(): Promise<Session> {
+    async function freshSession(
+      opts: { quiet?: boolean; mount?: MountDir } = {},
+    ): Promise<Session> {
+      const loadMount = opts.mount ?? mount
       const fresh = new Session(sessionOptions)
       if (!store) return fresh
       const saved = await store.list()
@@ -127,12 +145,14 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
       while (pending.length > 0) {
         const failed: typeof pending = []
         for (const tool of pending) {
-          const loaded = await fresh.run(tool.code, { mount })
+          const loaded = await fresh.run(tool.code, { mount: loadMount })
           if (!loaded.ok) failed.push({ ...tool, error: (loaded.error ?? '').split('\n')[0] })
         }
         if (failed.length === pending.length) {
-          const skipped = failed.map((p) => `${p.name} (${p.error})`).join('; ')
-          preludeNote = `[note: skipped saved tool(s) that failed to load: ${skipped}]\n\n`
+          if (!opts.quiet) {
+            const skipped = failed.map((p) => `${p.name} (${p.error})`).join('; ')
+            preludeNote = `[note: skipped saved tool(s) that failed to load: ${skipped}]\n\n`
+          }
           break
         }
         pending = failed

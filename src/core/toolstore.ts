@@ -102,9 +102,15 @@ export class ToolStore {
 
   /**
    * Host tools that let the sandboxed code manage the store.
-   * `isReserved` guards against shadowing real host tools.
+   * `isReserved` guards against shadowing real host tools. `validate` runs
+   * the candidate code in isolation (e.g. a fresh session) and returns an
+   * error string when it can't stand alone — catching code that leans on
+   * session-local imports or variables that won't exist next session.
    */
-  hostTools(isReserved: (name: string) => boolean): HostTool[] {
+  hostTools(
+    isReserved: (name: string) => boolean,
+    validate?: (code: string) => Promise<string | null>,
+  ): HostTool[] {
     const saveTool: HostTool = {
       name: 'save_tool',
       description:
@@ -124,6 +130,16 @@ export class ToolStore {
         const description = requireString(arg(args, kwargs, 2, 'description'), 'description')
         if (isReserved(name)) {
           throw new HostToolError(`'${name}' is a built-in tool name and cannot be replaced`, 'ValueError')
+        }
+        if (validate) {
+          const problem = await validate(code)
+          if (problem !== null) {
+            throw new HostToolError(
+              `the code does not work in a fresh session (${problem}); make it ` +
+                'self-contained — include any imports it needs inside the code',
+              'ValueError',
+            )
+          }
         }
         await this.save(name, code, description)
         return `Saved tool '${name}'. It loads automatically in new sessions.`

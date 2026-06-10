@@ -145,6 +145,26 @@ describe('saved tools through the pi extension', () => {
     expect(result.content[0].text).toBe('=> "NOW!"')
   })
 
+  it('rejects saving code that depends on session-local imports', async () => {
+    const tool = await makeExtensionTool({ toolStore: dir })
+    // json is imported in the session, but the saved code doesn't import it —
+    // it would break when auto-loaded into a fresh session
+    const result = await tool.execute('t1', {
+      code: `import json
+def parse_it(t):
+    return json.loads(t)
+code = 'def parse_it(t):\\n    return json.loads(t)'
+save_tool("parse_it", code, "Parse JSON.")`,
+    })
+    expect(result.content[0].text).toContain('self-contained')
+
+    const fixed = await tool.execute('t2', {
+      code: `code = 'import json\\ndef parse_it(t):\\n    return json.loads(t)'
+save_tool("parse_it", code, "Parse JSON.")`,
+    })
+    expect(fixed.content[0].text).toContain("Saved tool 'parse_it'")
+  })
+
   async function makeExtensionTool(options: Parameters<typeof createPythonExtension>[0]) {
     const tools: {
       description: string

@@ -72,6 +72,10 @@ pause/resume protocol, in-process.
   `json.loads(text)`), and `os.listdir`/`os.walk` don't exist. Read-only mode blocks
   writes, symlink escapes, and `..` traversal (all verified). Constructing a
   `MountDir` canonicalizes the host path and **throws if it doesn't exist**.
+- **A MountDir can't be attached to two runs at once** — a suspended run (paused at
+  a host call) still holds its mount; a nested run reusing the same instance fails
+  with `RuntimeError: mount 0 is already in use by another run`. Construct a fresh
+  MountDir for nested/concurrent runs.
 - **Definition order matters**: a function body can only resolve module-level names
   defined *before* the function's own `def` (verified: `def a(): return b()` then
   `def b(): ...` defines fine but `a()` raises NameError). Concatenating definitions
