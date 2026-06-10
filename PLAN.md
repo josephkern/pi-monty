@@ -96,11 +96,12 @@ verifying external functions, pause/resume, REPL dump/load, tracebacks, limits.
   exception type); call trace collection
 - vitest suite (17 tests) covering happy paths + error paths
 
-### M2 — ToolRegistry + prompt rendering
-- `HostTool` registration with name collision/identifier validation
-- Python stub + docstring rendering for the system prompt
-- a starter built-in toolset proving the pattern: `read_file` (read-only `MountDir`),
-  `list_files`, `http_get` (host-side fetch — credentials stay outside the sandbox)
+### M2 — ToolRegistry + prompt rendering ✅
+- `ToolRegistry` with name collision/identifier validation; `CodeRunner` delegates to it
+- Python stub + docstring rendering (`renderToolStub`, `PYTHON_TOOL_RULES`)
+- starter built-ins (`createBuiltinTools`): `read_file`/`list_files` rooted at a
+  workspace dir (traversal- and symlink-escape-proof), `http_get` (host-side fetch —
+  credentials stay outside the sandbox); Python-style positional-or-keyword args
 
 ### M3 — Sessions
 - `Session` wrapping `MontyRepl`: variables/functions persist across tool invocations

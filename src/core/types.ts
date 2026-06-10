@@ -23,8 +23,10 @@ export interface HostTool {
   /** Becomes the docstring in the rendered Python stub. */
   description: string
   params: HostToolParam[]
-  /** Python type + shape of the return value (the model's code must deserialize it). */
+  /** Python type expression of the return value, e.g. 'str', 'list[dict]'. */
   returns: string
+  /** Shape/meaning of the return value (the model's code must deserialize it). */
+  returnsDescription?: string
   execute(args: unknown[], kwargs: Record<string, unknown>): unknown | Promise<unknown>
 }
 

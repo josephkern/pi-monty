@@ -8,6 +8,7 @@ import {
   MontyTypingError,
 } from '@pydantic/monty'
 import type { ResourceLimits } from '@pydantic/monty'
+import { ToolRegistry } from './registry.js'
 import { HostToolError } from './types.js'
 import type { HostTool, RunLimits, RunOptions, RunResult, ToolCallTrace } from './types.js'
 
@@ -26,7 +27,7 @@ function namedPlaceholder(name: string): () => undefined {
 }
 
 export interface CodeRunnerOptions {
-  tools?: HostTool[]
+  tools?: HostTool[] | ToolRegistry
   /** Default limits for every run; overridable per run. */
   limits?: RunLimits
 }
@@ -41,26 +42,21 @@ export interface CodeRunnerOptions {
  * raised into Python as catchable exceptions.
  */
 export class CodeRunner {
-  private readonly tools = new Map<string, HostTool>()
+  readonly registry: ToolRegistry
   private readonly limits: RunLimits
 
   constructor(options: CodeRunnerOptions = {}) {
     this.limits = { ...DEFAULT_LIMITS, ...options.limits }
-    for (const tool of options.tools ?? []) this.addTool(tool)
+    this.registry =
+      options.tools instanceof ToolRegistry ? options.tools : new ToolRegistry(options.tools)
   }
 
   addTool(tool: HostTool): void {
-    if (!/^[a-z_][a-z0-9_]*$/i.test(tool.name)) {
-      throw new Error(`Tool name '${tool.name}' is not a valid Python identifier`)
-    }
-    if (this.tools.has(tool.name)) {
-      throw new Error(`Tool '${tool.name}' is already registered`)
-    }
-    this.tools.set(tool.name, tool)
+    this.registry.add(tool)
   }
 
   getTools(): HostTool[] {
-    return [...this.tools.values()]
+    return this.registry.list()
   }
 
   async run(code: string, options: RunOptions = {}): Promise<RunResult> {
@@ -110,7 +106,7 @@ export class CodeRunner {
       if (options.signal?.aborted) return fail('aborted', 'Run aborted by the host')
 
       if (progress instanceof MontyNameLookup) {
-        const known = this.tools.has(progress.variableName)
+        const known = this.registry.has(progress.variableName)
         try {
           // A known tool referenced without being called (aliased, stored, passed
           // around). Monty reports calls through the value under the JS function's
@@ -125,7 +121,7 @@ export class CodeRunner {
       }
 
       const snapshot: MontySnapshot = progress
-      const tool = this.tools.get(snapshot.functionName)
+      const tool = this.registry.get(snapshot.functionName)
       let resumeArg: Parameters<MontySnapshot['resume']>[0]
       if (!tool) {
         resumeArg = {
