@@ -55,6 +55,11 @@ pause/resume protocol, in-process.
   Resume lookups with a placeholder named after the tool and `f = double; f(2)` works.
 - **Last-expression output is module-level only**: an expression at the end of an
   `except`/`if` block returns `null`; the result must be a top-level expression.
+- **`MontyRepl.feed()` supports neither external functions nor printCallback** — native
+  `FeedOptions` has only `mount`. REPL sessions therefore can't call host tools; our
+  `Session` replays the transcript with a tool-call cache instead. Revisit when monty
+  extends FeedOptions.
+- `dir()` is not among the supported builtins.
 - **`runMontyAsync` masks runtime errors**: `snapshot.resume({returnValue})` sits inside
   its `try`, so a genuine `MontyRuntimeError` raised by subsequent Python code is caught
   and re-injected into the already-consumed snapshot, surfacing as the cryptic

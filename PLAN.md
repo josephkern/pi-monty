@@ -103,10 +103,16 @@ verifying external functions, pause/resume, REPL dump/load, tracebacks, limits.
   workspace dir (traversal- and symlink-escape-proof), `http_get` (host-side fetch —
   credentials stay outside the sandbox); Python-style positional-or-keyword args
 
-### M3 — Sessions
-- `Session` wrapping `MontyRepl`: variables/functions persist across tool invocations
-- `dump()/load()` round-trip; size cap with graceful reset + notice to the model
-- inject host variables (smolagents `additional_args` pattern)
+### M3 — Sessions ✅
+- `MontyRepl` turned out unusable here: `feed()` supports neither external functions
+  nor printCallback (0.0.18). `Session` instead **replays** the transcript of
+  successful snippets in a fresh interpreter per run, serving prior host-tool calls
+  from a recorded cache (no repeated side effects); failed snippets roll back fully
+- per-run results show only the new stdout and new tool calls
+- `dump()/load()` is plain JSON — human-readable and branch-safe for pi `details`
+- inputs persist across snippets (smolagents `additional_args` pattern)
+- caveats: non-deterministic code (e.g. `datetime.now()`) can diverge on replay;
+  replay cost grows with transcript length (monty is fast; fine at session scale)
 
 ### M4 — pi extension (MVP ships here)
 - `src/pi/extension.ts` registering a `python` tool (Typebox params: `{ code }`)
