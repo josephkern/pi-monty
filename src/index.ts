@@ -1,12 +1,7 @@
 export { CodeRunner } from './core/runner.js'
 export type { CodeRunnerOptions } from './core/runner.js'
-export {
-  PYTHON_TOOL_RULES,
-  ToolRegistry,
-  renderPythonToolRules,
-  renderToolStub,
-} from './core/registry.js'
-export { probeImportableModules } from './core/capabilities.js'
+export { ToolRegistry, renderPythonToolRules, renderToolStub } from './core/registry.js'
+export { probeImportableModules, probeTypeCheckerGaps } from './core/capabilities.js'
 export { createBuiltinTools } from './core/builtins.js'
 export type { BuiltinToolsOptions } from './core/builtins.js'
 export { Session } from './core/session.js'

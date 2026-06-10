@@ -81,6 +81,56 @@ describe('python pi extension', () => {
     expect(result.content[0].text).toBe('=> "pi-monty"')
   })
 
+  it('falls back to read_file when the mount root is missing', async () => {
+    const { tool } = await loadExtension({ root: '/nonexistent-dir-for-pi-monty-test' })
+    expect(tool.description).toContain('def read_file(')
+    expect(tool.description).not.toContain('/workspace')
+  })
+
+  it('derives guideline examples from the actual registry', async () => {
+    const tools: { promptGuidelines?: string[] }[] = []
+    const api = {
+      registerTool: (t: unknown) => tools.push(t as (typeof tools)[number]),
+      on: () => {},
+    }
+    await createPythonExtension({ tools: [greet], noBuiltins: true, toolStore: false })(
+      api as never,
+    )
+    const guidelines = tools[0].promptGuidelines!.join('\n')
+    expect(guidelines).toContain('greet')
+    expect(guidelines).not.toContain('list_files')
+  })
+
+  it('hints at reset when a restored session fails its first run', async () => {
+    const { tool, handlers } = await loadExtension({ noBuiltins: true })
+    const first = await tool.execute('t1', { code: 'kept = 1' })
+
+    const sessionStart = handlers.get('session_start')![0]
+    sessionStart(
+      {},
+      {
+        sessionManager: {
+          getBranch: () => [
+            { type: 'message', message: { toolName: 'code', details: first.details } },
+          ],
+        },
+      },
+    )
+
+    const failed = await tool.execute('t2', { code: 'missing_name' })
+    expect(failed.content[0].text).toContain('retry with reset=true')
+    // the hint is one-shot
+    const failedAgain = await tool.execute('t3', { code: 'missing_name' })
+    expect(failedAgain.content[0].text).not.toContain('retry with reset=true')
+  })
+
+  it('reuses the previous state dump for failed runs', async () => {
+    const { tool } = await loadExtension({ noBuiltins: true })
+    const ok = await tool.execute('t1', { code: 'x = 1' })
+    const failed = await tool.execute('t2', { code: '1 / 0' })
+    expect(failed.details.state).toBe(ok.details.state)
+  })
+
   it('blocks writes through the mount', async () => {
     const { tool } = await loadExtension({ root: process.cwd() })
     const result = await tool.execute('t1', {

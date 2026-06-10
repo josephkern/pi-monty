@@ -82,7 +82,13 @@ export class ToolStore {
     }
   }
 
-  /** Concatenated saved-tool code, to run as a new session's first snippet. */
+  /**
+   * Concatenated saved-tool code, to run as a new session's first snippet.
+   * Caveats: one malformed file fails the whole snippet, and monty resolves a
+   * function's globals only if defined before it, so cross-tool calls break
+   * unless alphabetical order happens to match dependency order. Prefer
+   * loading tools one at a time with retry (see the pi extension).
+   */
   async prelude(): Promise<string> {
     return (await this.list()).map((t) => t.code.trim()).join('\n\n')
   }

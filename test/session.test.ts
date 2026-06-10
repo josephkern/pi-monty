@@ -102,3 +102,14 @@ describe('Session', () => {
     expect(result.error).toContain('not defined')
   })
 })
+
+describe('review fixes', () => {
+  it('reports typing diagnostics with line numbers in the new snippet', async () => {
+    const session = new Session()
+    await session.run('a = 1\nb = 2\nc = 3')
+    const result = await session.run('d = 4\nd.upper()')
+    expect(result.ok).toBe(false)
+    expect(result.errorKind).toBe('typing')
+    expect(result.error).toContain('tool.py:2:') // line 2 of the submitted snippet
+  })
+})

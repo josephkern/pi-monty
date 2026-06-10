@@ -70,7 +70,15 @@ pause/resume protocol, in-process.
 - **Mounts**: `open()`, `with`, `.read()/.readlines()`, and `pathlib.Path.read_text()`
   work; file objects are NOT iterable, `json.load` is missing (use
   `json.loads(text)`), and `os.listdir`/`os.walk` don't exist. Read-only mode blocks
-  writes, symlink escapes, and `..` traversal (all verified).
+  writes, symlink escapes, and `..` traversal (all verified). Constructing a
+  `MountDir` canonicalizes the host path and **throws if it doesn't exist**.
+- **Definition order matters**: a function body can only resolve module-level names
+  defined *before* the function's own `def` (verified: `def a(): return b()` then
+  `def b(): ...` defines fine but `a()` raises NameError). Concatenating definitions
+  in arbitrary order is unsafe; load-and-retry effectively topo-sorts.
+- **"OS functions" are quarantined by design**: `datetime.now()`, `os.environ`,
+  `time`, `random` raise (`not implemented with standard execution`) — monty keeps
+  the interpreter deterministic; nondeterminism must come through host functions.
 - **`runMontyAsync` masks runtime errors**: `snapshot.resume({returnValue})` sits inside
   its `try`, so a genuine `MontyRuntimeError` raised by subsequent Python code is caught
   and re-injected into the already-consumed snapshot, surfacing as the cryptic

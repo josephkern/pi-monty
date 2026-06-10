@@ -22,6 +22,12 @@ export interface HostTool {
   name: string
   /** Becomes the docstring in the rendered Python stub. */
   description: string
+  /**
+   * Rendered into the prompt stub AND (when typeCheck is on, the default)
+   * enforced pre-execution via generated type stubs — declare accurately.
+   * Types must be real Python type expressions; a stub ty can't parse
+   * degrades that tool to unchecked.
+   */
   params: HostToolParam[]
   /** Python type expression of the return value, e.g. 'str', 'list[dict]'. */
   returns: string
@@ -76,6 +82,12 @@ export interface RunOptions {
   maxStdoutBytes?: number
   /** Streaming observer for print() chunks, called as they happen (uncapped). */
   onPrint?: (text: string) => void
+  /**
+   * Lines the caller prepended to the code (e.g. a session's replayed
+   * transcript), subtracted from reported typing-diagnostic line numbers so
+   * they point into the code the caller submitted.
+   */
+  lineOffset?: number
 }
 
 export interface RunResult {

@@ -63,8 +63,10 @@ export class Session {
   }
 
   async run(code: string, options: RunOptions = {}): Promise<RunResult> {
-    const transcript = this.snippets.map((s) => s.code)
-    const combined = [...transcript, code].map((c) => c.replace(/\n+$/, '')).join('\n')
+    const transcript = this.snippets.map((s) => s.code.replace(/\n+$/, ''))
+    const combined = [...transcript, code.replace(/\n+$/, '')].join('\n')
+    const transcriptText = transcript.join('\n')
+    const transcriptLines = transcriptText === '' ? 0 : transcriptText.split('\n').length
     const inputs = this.mergedInputs(options.inputs)
 
     // Replay wrapper: serve the first N host-tool calls from the cache so
@@ -107,13 +109,14 @@ export class Session {
       ...options,
       onPrint,
       inputs: Object.keys(inputs).length > 0 ? inputs : undefined,
+      lineOffset: transcriptLines + (options.lineOffset ?? 0),
     })
 
     // Surface only this snippet's contribution, not the replayed prefix.
+    // Slice by length (not startsWith) so a replay whose output drifted —
+    // e.g. a mounted file changed on disk — doesn't re-emit old output.
     const fullStdout = result.stdout
-    result.stdout = fullStdout.startsWith(this.stdout)
-      ? fullStdout.slice(this.stdout.length)
-      : fullStdout
+    result.stdout = fullStdout.slice(this.stdout.length)
     result.calls = result.calls.slice(served)
 
     if (result.ok) {

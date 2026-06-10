@@ -229,3 +229,43 @@ describe('error paths', () => {
     expect(result.stdout).not.toContain('never')
   })
 })
+
+describe('review fixes', () => {
+  it('degrades a tool with a prose type string to unchecked instead of failing every run', async () => {
+    const runner = new CodeRunner({
+      tools: [
+        {
+          name: 'fetch_json',
+          description: 'Fetch.',
+          params: [{ name: 'url', type: 'str' }],
+          returns: 'JSON string', // not a type expression — pre-typecheck configs did this
+          execute: () => '{"a": 1}',
+        },
+      ],
+    })
+    const result = await runner.run('print(fetch_json("x"))\nlen("done")')
+    expect(result.ok).toBe(true)
+    expect(result.output).toBe(4)
+    expect(result.calls).toHaveLength(1)
+  })
+
+  it('rejects invalid input names with a clear host error', async () => {
+    await expect(new CodeRunner().run('1', { inputs: { 'my-var': 1 } })).rejects.toThrow(
+      /not a valid Python identifier/,
+    )
+    await expect(new CodeRunner().run('1', { inputs: { class: 1 } })).rejects.toThrow(
+      /not a valid Python identifier/,
+    )
+  })
+
+  it('keeps typing classification when syntax and typing diagnostics mix', async () => {
+    const result = await new CodeRunner().run('x = "s"\nx.uppercase()')
+    expect(result.errorKind).toBe('typing')
+  })
+
+  it('shifts typing diagnostics by lineOffset', async () => {
+    const result = await new CodeRunner().run('pad = 1\n"s".uppercase()', { lineOffset: 1 })
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('tool.py:1:')
+  })
+})

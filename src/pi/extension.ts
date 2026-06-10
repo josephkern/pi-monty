@@ -37,7 +37,7 @@ export interface PythonExtensionOptions {
   tools?: HostTool[]
   /** Workspace root for the built-in file tools. Default: process.cwd(). */
   root?: string
-  /** Disable the built-in list_files/http_get tools. */
+  /** Disable the built-in tools (list_files, http_get, and read_file when the mount is off). */
   noBuiltins?: boolean
   /**
    * Mount the workspace read-only at /workspace so code reads files with
@@ -80,17 +80,20 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
   return async (pi: ExtensionAPI) => {
     const toolName = options.toolName ?? DEFAULT_TOOL_NAME
     const root = options.root ?? process.cwd()
-    const mountWorkspace = options.mountWorkspace ?? true
-    const mount = mountWorkspace
-      ? new MountDir('/workspace', root, { mode: 'read-only' })
-      : undefined
+    let mount: MountDir | undefined
+    if (options.mountWorkspace ?? true) {
+      try {
+        mount = new MountDir('/workspace', root, { mode: 'read-only' })
+      } catch {
+        // root missing/unreadable: degrade to the read_file tool rather than
+        // failing the whole extension load
+        mount = undefined
+      }
+    }
     const registry = new ToolRegistry(options.tools)
     if (!options.noBuiltins) {
-      for (const tool of createBuiltinTools({ root })) {
-        // the mount replaces read_file with plain open()
-        if (mountWorkspace && tool.name === 'read_file') continue
-        registry.add(tool)
-      }
+      // the mount replaces read_file with plain open()
+      for (const tool of createBuiltinTools({ root, readFile: !mount })) registry.add(tool)
     }
     const store =
       options.toolStore === false ? null : new ToolStore(options.toolStore ?? join(root, '.pi', 'code-tools'))
@@ -104,28 +107,35 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
     // which is async, so creation happens lazily in execute().
     let session: Session | null = null
     let preludeNote = ''
+    // serialized state of the session as of the last successful run; reused
+    // for failed runs (state unchanged) so details don't re-serialize
+    let lastState = ''
+    // set when state came from a previous conversation and hasn't run yet
+    let restoredUnverified = false
 
     async function freshSession(): Promise<Session> {
       const fresh = new Session(sessionOptions)
       if (!store) return fresh
-      // Load saved tools one at a time so a malformed file (e.g. written
-      // directly instead of via save_tool) skips just that tool. Two passes:
-      // a tool referencing one that sorts after it loads on the retry.
-      const loadEach = async (tools: { name: string; code: string }[]) => {
-        const failed: { name: string; code: string; error: string }[] = []
-        for (const saved of tools) {
-          const loaded = await fresh.run(saved.code)
-          if (!loaded.ok) {
-            failed.push({ ...saved, error: (loaded.error ?? '').split('\n')[0] })
-          }
+      const saved = await store.list()
+      if (saved.length === 0) return fresh
+      // Per-file loading, looping until the failed set stops shrinking: a
+      // malformed file skips just that tool, and dependency chains load in
+      // any order (monty resolves a function's globals only if they were
+      // defined BEFORE it — retrying failures effectively topo-sorts, which
+      // a single combined snippet cannot guarantee).
+      let pending: { name: string; code: string; error?: string }[] = saved
+      while (pending.length > 0) {
+        const failed: typeof pending = []
+        for (const tool of pending) {
+          const loaded = await fresh.run(tool.code, { mount })
+          if (!loaded.ok) failed.push({ ...tool, error: (loaded.error ?? '').split('\n')[0] })
         }
-        return failed
-      }
-      let pending = await loadEach(await store.list())
-      if (pending.length > 0) pending = await loadEach(pending)
-      if (pending.length > 0) {
-        const skipped = pending.map((p) => `${p.name} (${p.error})`).join('; ')
-        preludeNote = `[note: skipped saved tool(s) that failed to load: ${skipped}]\n\n`
+        if (failed.length === pending.length) {
+          const skipped = failed.map((p) => `${p.name} (${p.error})`).join('; ')
+          preludeNote = `[note: skipped saved tool(s) that failed to load: ${skipped}]\n\n`
+          break
+        }
+        pending = failed
       }
       return fresh
     }
@@ -144,6 +154,8 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         }
       }
       session = state ? Session.load(state, sessionOptions) : null
+      lastState = state ?? ''
+      restoredUnverified = Boolean(state)
     })
 
     pi.registerTool({
@@ -162,7 +174,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         ...(savedSummary
           ? [
               '',
-              'Saved functions (already defined in the session — call them from your',
+              'Saved functions (auto-loaded into new sessions — call them from your',
               `code like any function, e.g. via ${toolName} with "result = name(...)"):`,
               savedSummary,
             ]
@@ -170,7 +182,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         '',
         'Rules:',
         renderPythonToolRules(probeImportableModules()),
-        ...(mountWorkspace
+        ...(mount
           ? [
               `- The workspace is mounted READ-ONLY at /workspace: read files with open("/workspace/<path>") or pathlib (paths from list_files are relative to it). Files are not iterable — use .read()/.readlines(); parse JSON with json.loads(text). Writes raise PermissionError; change real files with the regular edit/write tools.`,
             ]
@@ -179,7 +191,15 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
       promptSnippet: `${toolName}: run sandboxed Python; host tools are callable as functions; state persists`,
       promptGuidelines: [
         `Use ${toolName} for multi-step tool workflows: loop/filter/aggregate in code and print only the result, instead of issuing many separate tool calls.`,
-        `Functions listed in the ${toolName} tool description (list_files, http_get, save_tool, and any saved functions) are NOT standalone tools — they only exist inside ${toolName}'s Python environment. To use one, call ${toolName} with code that invokes it.`,
+        ...(registry.list().length > 0
+          ? [
+              `Functions listed in the ${toolName} tool description (${registry
+                .list()
+                .slice(0, 3)
+                .map((t) => t.name)
+                .join(', ')}, ...) are NOT standalone tools — they only exist inside ${toolName}'s Python environment. To use one, call ${toolName} with code that invokes it.`,
+            ]
+          : []),
         ...(store
           ? [
               `To create a reusable saved tool, call save_tool(name, code, description) inside ${toolName} — it validates the code. Do not write files into .pi/code-tools directly.`,
@@ -188,7 +208,11 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
       ],
       parameters: PythonParams,
       async execute(_toolCallId, params, signal, onUpdate, _ctx) {
-        if (params.reset || !session) session = await freshSession()
+        if (params.reset || !session) {
+          session = await freshSession()
+          lastState = ''
+          restoredUnverified = false
+        }
 
         let streamed = ''
         const result = await session.run(params.code, {
@@ -214,7 +238,12 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         } else {
           if (text && !text.endsWith('\n')) text += '\n'
           text += result.error
+          if (restoredUnverified) {
+            text +=
+              '\n[note: session state was restored from an earlier conversation; if this error references older code, retry with reset=true]'
+          }
         }
+        restoredUnverified = false
 
         const truncation = truncateHead(text, {
           maxLines: DEFAULT_MAX_LINES,
@@ -223,11 +252,14 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         let finalText = truncation.content
         if (truncation.truncated) finalText += '\n[output truncated]'
 
+        // failed runs leave session state unchanged — reuse the last dump
+        if (result.ok || !lastState) lastState = session.dump()
+
         return {
           content: [{ type: 'text', text: finalText }],
           details: {
             ok: result.ok,
-            state: session.dump(),
+            state: lastState,
             calls: result.calls.map((c) => c.tool),
           } satisfies PythonDetails,
         }

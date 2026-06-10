@@ -8,6 +8,7 @@ import {
   MontyTypingError,
 } from '@pydantic/monty'
 import type { ResourceLimits } from '@pydantic/monty'
+import { probeTypeCheckerGaps } from './capabilities.js'
 import { ToolRegistry } from './registry.js'
 import { HostToolError } from './types.js'
 import type { HostTool, RunLimits, RunOptions, RunResult, ToolCallTrace } from './types.js'
@@ -19,19 +20,15 @@ const DEFAULT_LIMITS: Required<Pick<RunLimits, 'maxDurationSecs' | 'maxMemory'>>
 
 const DEFAULT_MAX_STDOUT_BYTES = 1024 * 1024
 
-/**
- * Names monty provides at runtime that its bundled type checker doesn't know
- * (verified on 0.0.18). Declared as Any in the typecheck prefix so valid code
- * using them isn't rejected; prune as monty's ty config catches up.
- */
-const TY_MISSING_BUILTINS = [
-  'open',
-  'bytearray',
-  'PermissionError',
-  'FileNotFoundError',
-  'IsADirectoryError',
-  'NotADirectoryError',
-]
+const PYTHON_KEYWORDS = new Set([
+  'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break',
+  'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally',
+  'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal',
+  'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield',
+])
+
+// probed once per process; names land verbatim in the typecheck prefix
+let typeCheckerGaps: string[] | null = null
 
 /** Monty names calls through a resolved value after the JS function's `name`. */
 function namedPlaceholder(name: string): () => undefined {
@@ -97,14 +94,23 @@ export class CodeRunner {
     }
 
     const scriptName = options.scriptName ?? 'tool.py'
+    const lineOffset = options.lineOffset ?? 0
 
-    // The type checker doesn't know tools or declared inputs; feed both in as
-    // prefix code, then shift reported line numbers back to the user's code.
     const inputNames = options.inputs ? Object.keys(options.inputs) : []
+    for (const name of inputNames) {
+      if (!/^[a-z_][a-z0-9_]*$/i.test(name) || PYTHON_KEYWORDS.has(name)) {
+        throw new Error(`Input name '${name}' is not a valid Python identifier`)
+      }
+    }
+
+    // The type checker doesn't know tools, declared inputs, or some runtime
+    // builtins; feed all three in as prefix code, then shift reported line
+    // numbers back to the user's code.
     const prefixLines: string[] = []
     if (this.typeCheck) {
+      typeCheckerGaps ??= probeTypeCheckerGaps()
       prefixLines.push('from typing import Any')
-      for (const name of [...TY_MISSING_BUILTINS, ...inputNames]) {
+      for (const name of [...typeCheckerGaps, ...inputNames]) {
         prefixLines.push(`${name}: Any = None`)
       }
       const stubs = this.registry.renderTypeStubs()
@@ -118,34 +124,68 @@ export class CodeRunner {
       error: string,
     ): RunResult => ({ ok: false, output: undefined, stdout, stdoutTruncated, error, errorKind, calls })
 
-    const adjustLines = (diagnostics: string): string =>
-      diagnostics.replace(
-        new RegExp(`${scriptName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:(\\d+):`, 'g'),
-        (match, line) => `${scriptName}:${Number(line) - prefixLineCount}:`,
-      )
+    const locationRe = new RegExp(
+      `${scriptName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:(\\d+):`,
+    )
+
+    const adjustLines = (diagnosticLines: string[]): string =>
+      diagnosticLines
+        .map((line) =>
+          line.replace(locationRe, (_m, raw) => `${scriptName}:${Number(raw) - prefixLineCount - lineOffset}:`),
+        )
+        .join('\n')
+
+    // Splits ty diagnostics into ones about the user's code vs ones pointing
+    // into our generated prefix (a host-side bug, e.g. a tool stub ty can't
+    // parse) — the model can't act on the latter.
+    const typingFailure = (e: MontyTypingError): RunResult | null => {
+      const lines = e
+        .displayDiagnostics('concise')
+        .split('\n')
+        .filter((line) => line.trim() !== '')
+      const userLines = lines.filter((line) => {
+        const match = locationRe.exec(line)
+        return !match || Number(match[1]) > prefixLineCount
+      })
+      if (userLines.length === 0) return null // all prefix-resident: degrade below
+      const kind = userLines.every((line) => line.includes('error[invalid-syntax]'))
+        ? 'syntax'
+        : 'typing'
+      return fail(kind, adjustLines(userLines))
+    }
 
     const pythonFailure = (e: unknown): RunResult => {
       if (e instanceof MontyRuntimeError) return fail('runtime', e.display('traceback'))
-      if (e instanceof MontyTypingError) {
-        const diagnostics = adjustLines(e.displayDiagnostics('concise'))
-        // with typeCheck on, parse errors surface as ty invalid-syntax diagnostics
-        const kind = diagnostics.includes('error[invalid-syntax]') ? 'syntax' : 'typing'
-        return fail(kind, diagnostics)
-      }
+      if (e instanceof MontyTypingError) return typingFailure(e) ?? fail('typing', e.display())
       if (e instanceof MontySyntaxError) return fail('syntax', e.display('type-msg'))
       throw e
     }
 
+    const montyOptions = {
+      scriptName,
+      inputs: inputNames.length > 0 ? inputNames : undefined,
+    }
     let monty: Monty
     try {
       monty = new Monty(code, {
-        scriptName,
-        inputs: inputNames.length > 0 ? inputNames : undefined,
+        ...montyOptions,
         typeCheck: this.typeCheck,
         typeCheckPrefixCode: prefix || undefined,
       })
     } catch (e) {
-      return pythonFailure(e)
+      if (e instanceof MontyTypingError) {
+        const failure = typingFailure(e)
+        if (failure) return failure
+        // every diagnostic pointed into the generated prefix — run unchecked
+        // rather than failing on code the model never wrote
+        try {
+          monty = new Monty(code, montyOptions)
+        } catch (e2) {
+          return pythonFailure(e2)
+        }
+      } else {
+        return pythonFailure(e)
+      }
     }
 
     const limits = { ...this.limits, ...options.limits } as ResourceLimits

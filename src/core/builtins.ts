@@ -7,6 +7,8 @@ import type { HostTool } from './types.js'
 export interface BuiltinToolsOptions {
   /** Workspace root; file tools cannot escape it. */
   root: string
+  /** Include the read_file tool. Disable when a workspace mount replaces it. Default true. */
+  readFile?: boolean
   /** Cap on returned file bytes; longer files are truncated. Default 256 KiB. */
   maxFileBytes?: number
   /** Cap on returned HTTP body bytes. Default 256 KiB. */
@@ -136,5 +138,7 @@ export function createBuiltinTools(options: BuiltinToolsOptions): HostTool[] {
     },
   }
 
-  return [readFileTool, listFilesTool, httpGetTool]
+  const tools = [listFilesTool, httpGetTool]
+  if (options.readFile ?? true) tools.unshift(readFileTool)
+  return tools
 }

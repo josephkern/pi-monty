@@ -155,6 +155,18 @@ The general-purpose payoff: the agent builds its own toolbox.
 - **PII tokenization** at the bridge boundary
 - Publish as a pi package (`pi.dev/packages`) and as a standalone npm library
 
+## Deferred from the 0.2.0 code review (post-MVP)
+
+- mounted reads have no size cap (the 64 MiB heap limit is the backstop) and replay
+  re-reads mounted files from disk — mutating a workspace file mid-session changes
+  what earlier snippets see on replay
+- ty re-checks the full replayed transcript on every run (linear ms-scale growth);
+  fine at session scale, revisit with transcript compaction
+- per-message session-state dumps grow pi session files O(n²) across a conversation
+  (failed runs now reuse the last dump; delta encoding would fix the rest)
+- saved-tool loading replays the session per file (O(N²) interpreter runs) — the
+  price of correct dependency ordering; cache the post-prelude dump if it bites
+
 ## Known constraints / risks
 
 - monty is 0.0.x and experimental: no classes or match statements yet, small stdlib

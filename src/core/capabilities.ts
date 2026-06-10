@@ -48,3 +48,33 @@ export function probeImportableModules(candidates: string[] = CANDIDATE_MODULES)
     }
   })
 }
+
+/**
+ * Runtime names monty's bundled type checker historically didn't know
+ * (verified gaps on 0.0.18). Each is probed before being declared, so the
+ * workaround self-prunes once ty learns a name.
+ */
+const TY_GAP_CANDIDATES = [
+  'open',
+  'bytearray',
+  'PermissionError',
+  'FileNotFoundError',
+  'IsADirectoryError',
+  'NotADirectoryError',
+]
+
+/**
+ * Names the interpreter provides at runtime that its type checker rejects as
+ * unresolved. These need `name: Any = None` declarations in any typecheck
+ * prefix so valid code isn't refused pre-execution.
+ */
+export function probeTypeCheckerGaps(candidates: string[] = TY_GAP_CANDIDATES): string[] {
+  return candidates.filter((name) => {
+    try {
+      new Monty(name, { typeCheck: true })
+      return false // ty resolves it; declaring it would shadow real checking
+    } catch {
+      return true
+    }
+  })
+}

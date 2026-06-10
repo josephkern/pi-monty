@@ -106,15 +106,34 @@ describe('saved tools through the pi extension', () => {
     expect(result.content[0].text).toContain('=> "OK"')
   })
 
-  it('loads saved tools that depend on later-sorting tools via the retry pass', async () => {
+  it('loads dependency chains of any depth via the fixpoint loop', async () => {
     const { writeFile, mkdir } = await import('node:fs/promises')
     await mkdir(dir, { recursive: true })
-    await writeFile(join(dir, 'a_user.py'), '# Uses z_helper.\ndef a_user(x):\n    return z_helper(x) + 1\n')
-    await writeFile(join(dir, 'z_helper.py'), '# Helper.\ndef z_helper(x):\n    return x * 10\n')
+    // reverse-alphabetical 3-deep chain: every pass loads exactly one tool
+    await writeFile(join(dir, 'a_top.py'), '# Top.\ndef a_top(x):\n    return m_mid(x) + 1\n')
+    await writeFile(join(dir, 'm_mid.py'), '# Mid.\ndef m_mid(x):\n    return z_base(x) * 2\n')
+    await writeFile(join(dir, 'z_base.py'), '# Base.\ndef z_base(x):\n    return x + 10\n')
 
     const tool = await makeExtensionTool({ toolStore: dir })
-    const result = await tool.execute('t1', { code: 'a_user(4)' })
-    expect(result.content[0].text).toBe('=> 41')
+    const result = await tool.execute('t1', { code: 'a_top(1)' })
+    expect(result.content[0].text).toBe('=> 23')
+  })
+
+  it('loads saved tools that read the mounted workspace at import time', async () => {
+    const { writeFile, mkdir } = await import('node:fs/promises')
+    await mkdir(dir, { recursive: true })
+    await writeFile(
+      join(dir, 'pkg_name.py'),
+      '# Reads package.json at load time.\nimport json\n_PKG = json.loads(open("/workspace/package.json").read())\ndef pkg_name():\n    return _PKG["name"]\n',
+    )
+
+    const tool = await makeExtensionTool({
+      toolStore: dir,
+      root: process.cwd(),
+      mountWorkspace: true,
+    })
+    const result = await tool.execute('t1', { code: 'pkg_name()' })
+    expect(result.content[0].text).toBe('=> "pi-monty"')
   })
 
   it('reset reloads tools saved earlier in the same session', async () => {
