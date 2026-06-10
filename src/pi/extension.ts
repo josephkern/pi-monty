@@ -23,8 +23,6 @@ import { ToolStore } from '../core/toolstore.js'
 import type { HostTool, RunLimits } from '../core/types.js'
 
 const DEFAULT_TOOL_NAME = 'code'
-/** Older releases registered the tool as `python`; accept both when restoring. */
-const LEGACY_TOOL_NAMES = ['python']
 
 export interface PythonExtensionOptions {
   /**
@@ -71,7 +69,6 @@ const PythonParams = Type.Object({
 export function createPythonExtension(options: PythonExtensionOptions = {}) {
   return async (pi: ExtensionAPI) => {
     const toolName = options.toolName ?? DEFAULT_TOOL_NAME
-    const restoreNames = new Set([toolName, ...LEGACY_TOOL_NAMES])
     const root = options.root ?? process.cwd()
     const registry = new ToolRegistry(options.tools)
     if (!options.noBuiltins) {
@@ -111,7 +108,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
       for (const entry of ctx.sessionManager.getBranch()) {
         if (entry.type === 'message') {
           const message = entry.message as { toolName?: string; details?: PythonDetails }
-          if (message.toolName && restoreNames.has(message.toolName) && message.details?.state) {
+          if (message.toolName === toolName && message.details?.state) {
             state = message.details.state
           }
         }

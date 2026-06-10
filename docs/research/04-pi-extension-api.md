@@ -55,7 +55,7 @@ export default function (pi: ExtensionAPI) {
 
 ## Implications for our design
 
-- Our code tool is a single `pi.registerTool({ name: "python", ... })` extension.
+- Our code tool is a single `pi.registerTool({ name: "code", ... })` extension.
 - Streamed `print()` output → `onUpdate`; final result → `content`; REPL state pointer
   (or the serialized bytes/path) → `details` for branch-safe restore.
 - AbortSignal maps to monty's `maxDurationSecs` plus a host-side kill between resumes.

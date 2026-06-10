@@ -118,9 +118,9 @@ describe('python pi extension', () => {
     expect(result.content[0].text).toBe('=> "hello again"')
   })
 
-  it('restores state recorded under the legacy python tool name', async () => {
+  it('ignores state recorded under other tool names', async () => {
     const { tool, handlers } = await loadExtension({ noBuiltins: true })
-    const first = await tool.execute('t1', { code: 'legacy = 7' })
+    const first = await tool.execute('t1', { code: 'x = 7' })
 
     const sessionStart = handlers.get('session_start')![0]
     sessionStart(
@@ -134,7 +134,8 @@ describe('python pi extension', () => {
       },
     )
 
-    const result = await tool.execute('t2', { code: 'legacy' })
-    expect(result.content[0].text).toBe('=> 7')
+    const result = await tool.execute('t2', { code: 'x' })
+    expect(result.details.ok).toBe(false)
+    expect(result.content[0].text).toContain('NameError')
   })
 })

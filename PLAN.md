@@ -32,7 +32,7 @@ src/
 │   ├── session.ts           # Session: MontyRepl state, dump/load, injected variables
 │   └── toolstore.ts         # Ephemeral tools: save/list/load named Python functions
 ├── pi/
-│   └── extension.ts         # pi adapter: registerTool("python", ...)
+│   └── extension.ts         # pi adapter: registerTool("code", ...)
 └── index.ts
 examples/                    # standalone demos (no pi required)
 ```
@@ -116,7 +116,7 @@ verifying external functions, pause/resume, REPL dump/load, tracebacks, limits.
 
 ### M4 — pi extension (MVP ships here) ✅
 - `src/pi/extension.ts`: `createPythonExtension(options)` + default export;
-  registers a `python` tool (Typebox params `{ code, reset? }`) whose description
+  registers a `code` tool (name configurable; Typebox params `{ code, reset? }`) whose description
   embeds the rendered stubs + rules
 - streaming `print()` output via `onUpdate` (new `onPrint` core option, replay-aware);
   `truncateHead` on final output; tracebacks returned as content (observation channel)
@@ -161,5 +161,5 @@ The general-purpose payoff: the agent builds its own toolbox.
   external calls, `printCallback` must return `undefined`, `runMontyAsync` masks errors
   (we own the loop).
 - Code-mode has fixed overhead — for single sequential calls it's a net loss (Anthropic
-  measured ~8% cost increase on that shape). The `python` tool complements pi's direct
+  measured ~8% cost increase on that shape). The `code` tool complements pi's direct
   tools; it doesn't replace them.
