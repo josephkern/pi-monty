@@ -330,7 +330,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
           if (text && !text.endsWith('\n')) text += '\n'
           text += `[suspended] The script is paused awaiting user approval of ${
             result.suspendedCall ? formatCall(result.suspendedCall, 200) : 'a gated call'
-          }. Nothing after that call has run; completed work will not repeat. Once the user decides, call this tool with {"resume": true} to continue — this works even in a later session.`
+          }. Nothing after that call has run; completed work will not repeat. STOP and tell the user what is pending — do NOT call this tool again until the user explicitly says they have decided. Then continue with {"resume": true} (works even in a later session).`
         } else {
           if (text && !text.endsWith('\n')) text += '\n'
           text += result.error
