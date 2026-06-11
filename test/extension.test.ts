@@ -58,13 +58,79 @@ describe('python pi extension', () => {
     expect(tool.name).toBe('python')
   })
 
-  it('mounts the workspace and includes builtin stubs by default', async () => {
+  it('mounts the workspace, bridges pi tools, and includes builtins by default', async () => {
     const { tool } = await loadExtension({ root: '/tmp' })
-    expect(tool.description).toContain('def list_files(')
     expect(tool.description).toContain('def http_get(')
-    // the read-only mount replaces read_file with plain open()
+    // bridged pi tools, with mutating ones called out as approval-gated
+    expect(tool.description).toContain('def grep(')
+    expect(tool.description).toContain('def bash(')
+    expect(tool.description).toContain('bash/edit/write pause the script')
+    // the read-only mount replaces read_file; bridged ls replaces list_files
     expect(tool.description).not.toContain('def read_file(')
+    expect(tool.description).not.toContain('def list_files(')
     expect(tool.description).toContain('/workspace')
+  })
+
+  it('keeps list_files and skips pi tools when the bridge is off', async () => {
+    const { tool } = await loadExtension({ root: '/tmp', bridgePiTools: false })
+    expect(tool.description).toContain('def list_files(')
+    expect(tool.description).not.toContain('def bash(')
+  })
+
+  it('asks via ctx.ui.confirm for gated calls and honors the answer', async () => {
+    const { tool } = await loadExtension({ root: process.cwd() })
+    const confirms: string[] = []
+    const makeCtx = (answer: boolean) => ({
+      hasUI: true,
+      ui: {
+        confirm: async (_title: string, message: string) => {
+          confirms.push(message)
+          return answer
+        },
+      },
+    })
+    const denied = await tool.execute(
+      't1',
+      { code: 'bash("echo hi")' },
+      undefined,
+      undefined,
+      makeCtx(false),
+    )
+    expect(denied.details.ok).toBe(false)
+    expect(denied.content[0].text).toContain('PermissionError')
+    expect(confirms[0]).toContain('bash("echo hi")')
+
+    const approved = await tool.execute(
+      't2',
+      { code: 'bash("echo hi").strip()' },
+      undefined,
+      undefined,
+      makeCtx(true),
+    )
+    expect(approved.content[0].text).toContain('hi')
+  })
+
+  it('denies gated calls headlessly unless autoApprove is set', async () => {
+    const { tool } = await loadExtension({ root: process.cwd() })
+    const headless = await tool.execute(
+      't1',
+      { code: 'bash("echo hi")' },
+      undefined,
+      undefined,
+      { hasUI: false, ui: {} },
+    )
+    expect(headless.details.ok).toBe(false)
+    expect(headless.content[0].text).toContain('PermissionError')
+
+    const { tool: auto } = await loadExtension({ root: process.cwd(), autoApprove: true })
+    const allowed = await auto.execute(
+      't1',
+      { code: 'bash("echo hi").strip()' },
+      undefined,
+      undefined,
+      { hasUI: false, ui: {} },
+    )
+    expect(allowed.content[0].text).toContain('hi')
   })
 
   it('provides read_file when the mount is disabled', async () => {

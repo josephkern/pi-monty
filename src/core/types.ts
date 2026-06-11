@@ -33,7 +33,21 @@ export interface HostTool {
   returns: string
   /** Shape/meaning of the return value (the model's code must deserialize it). */
   returnsDescription?: string
+  /**
+   * Pause the script and ask the host for approval before each call (see
+   * RunOptions.onApproval). Denial raises PermissionError in the sandbox.
+   * Without an approver configured, gated calls are always denied.
+   */
+  requiresApproval?: boolean
   execute(args: unknown[], kwargs: Record<string, unknown>): unknown | Promise<unknown>
+}
+
+/** A gated host-tool call awaiting an approval decision. */
+export interface ApprovalRequest {
+  tool: string
+  args: unknown[]
+  kwargs: Record<string, unknown>
+  description: string
 }
 
 /** Thrown by host tools to raise a specific Python exception in the sandbox. */
@@ -57,6 +71,8 @@ export interface ToolCallTrace {
   ok: boolean
   /** Host-side error message when ok is false (what was raised into Python). */
   error?: string
+  /** Approval outcome, present only for tools with requiresApproval. */
+  approved?: boolean
 }
 
 export interface RunLimits {
@@ -88,6 +104,12 @@ export interface RunOptions {
    * they point into the code the caller submitted.
    */
   lineOffset?: number
+  /**
+   * Decides gated (requiresApproval) host-tool calls. The script is paused
+   * mid-execution while this resolves; returning false raises a catchable
+   * PermissionError in the sandbox. Gated calls are denied if omitted.
+   */
+  onApproval?: (request: ApprovalRequest) => boolean | Promise<boolean>
 }
 
 export interface RunResult {

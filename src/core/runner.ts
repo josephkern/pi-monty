@@ -233,15 +233,37 @@ export class CodeRunner {
           ok: false,
         }
         const startedAt = performance.now()
-        try {
-          const result = await tool.execute(snapshot.args, snapshot.kwargs)
-          trace.ok = true
-          resumeArg = { returnValue: result }
-        } catch (e) {
-          const err = e instanceof Error ? e : new Error(String(e))
-          const pythonType = err instanceof HostToolError ? err.pythonType : 'RuntimeError'
-          trace.error = `${pythonType}: ${err.message}`
-          resumeArg = { exception: { type: pythonType, message: err.message } }
+        let denial: string | null = null
+        if (tool.requiresApproval) {
+          if (!options.onApproval) {
+            trace.approved = false
+            denial = `${tool.name} requires approval but no approver is configured`
+          } else {
+            // the script is frozen at this call while the human decides
+            const approved = await options.onApproval({
+              tool: tool.name,
+              args: snapshot.args,
+              kwargs: snapshot.kwargs,
+              description: tool.description,
+            })
+            trace.approved = approved
+            if (!approved) denial = `${tool.name} call denied by the user`
+          }
+        }
+        if (denial !== null) {
+          trace.error = `PermissionError: ${denial}`
+          resumeArg = { exception: { type: 'PermissionError', message: denial } }
+        } else {
+          try {
+            const result = await tool.execute(snapshot.args, snapshot.kwargs)
+            trace.ok = true
+            resumeArg = { returnValue: result }
+          } catch (e) {
+            const err = e instanceof Error ? e : new Error(String(e))
+            const pythonType = err instanceof HostToolError ? err.pythonType : 'RuntimeError'
+            trace.error = `${pythonType}: ${err.message}`
+            resumeArg = { exception: { type: pythonType, message: err.message } }
+          }
         }
         trace.durationMs = performance.now() - startedAt
         calls.push(trace)

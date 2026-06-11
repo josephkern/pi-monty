@@ -11,6 +11,7 @@ export type { SavedTool } from './core/toolstore.js'
 export { arg, requireString } from './core/args.js'
 export { HostToolError } from './core/types.js'
 export type {
+  ApprovalRequest,
   HostTool,
   HostToolParam,
   RunLimits,

@@ -22,7 +22,8 @@ import { renderPythonToolRules, ToolRegistry } from '../core/registry.js'
 import { createBuiltinTools } from '../core/builtins.js'
 import { Session } from '../core/session.js'
 import { ToolStore } from '../core/toolstore.js'
-import type { HostTool, RunLimits } from '../core/types.js'
+import { createPiBridgeTools } from './bridge.js'
+import type { ApprovalRequest, HostTool, RunLimits } from '../core/types.js'
 
 const DEFAULT_TOOL_NAME = 'code'
 
@@ -47,6 +48,18 @@ export interface PythonExtensionOptions {
   mountWorkspace?: boolean
   /** Pre-execution static type checking with tool stubs. Default true. */
   typeCheck?: boolean
+  /**
+   * Bridge pi's built-in tools into the sandbox as Python functions:
+   * read/grep/find/ls dispatch directly; bash/edit/write pause for per-call
+   * user approval. Default true.
+   */
+  bridgePiTools?: boolean
+  /**
+   * Approve gated (bash/edit/write) calls without asking. Headless escape
+   * hatch — without it, gated calls are denied when no UI is available.
+   * Default false.
+   */
+  autoApprove?: boolean
   /**
    * Directory for agent-saved tools, or false to disable saving.
    * Default: <root>/.pi/code-tools.
@@ -90,10 +103,16 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         mount = undefined
       }
     }
+    const bridge = options.bridgePiTools ?? true
     const registry = new ToolRegistry(options.tools)
+    if (bridge) {
+      for (const tool of createPiBridgeTools(root)) registry.add(tool)
+    }
     if (!options.noBuiltins) {
-      // the mount replaces read_file with plain open()
-      for (const tool of createBuiltinTools({ root, readFile: !mount })) registry.add(tool)
+      // the mount replaces read_file with plain open(); bridged ls replaces list_files
+      for (const tool of createBuiltinTools({ root, readFile: !mount, listFiles: !bridge })) {
+        registry.add(tool)
+      }
     }
     const store =
       options.toolStore === false ? null : new ToolStore(options.toolStore ?? join(root, '.pi', 'code-tools'))
@@ -116,6 +135,10 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
       }
     }
     const savedSummary = store ? await store.renderSummary() : ''
+    const gatedNames = registry
+      .list()
+      .filter((t) => t.requiresApproval)
+      .map((t) => t.name)
 
     const sessionOptions = { tools: registry, limits: options.limits, typeCheck: options.typeCheck }
     // null until first use: a fresh session loads saved tools as a prelude,
@@ -202,6 +225,11 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         '',
         'Rules:',
         renderPythonToolRules(probeImportableModules()),
+        ...(gatedNames.length > 0
+          ? [
+              `- Calls to ${gatedNames.join('/')} pause the script for per-call user approval; a denial raises PermissionError (catch it or stop gracefully). Group related work so the user approves meaningful units.`,
+            ]
+          : []),
         ...(mount
           ? [
               `- The workspace is mounted READ-ONLY at /workspace: read files with open("/workspace/<path>") or pathlib (paths from list_files are relative to it). Files are not iterable — use .read()/.readlines(); parse JSON with json.loads(text). Writes raise PermissionError; change real files with the regular edit/write tools.`,
@@ -227,17 +255,29 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
           : []),
       ],
       parameters: PythonParams,
-      async execute(_toolCallId, params, signal, onUpdate, _ctx) {
+      async execute(_toolCallId, params, signal, onUpdate, ctx) {
         if (params.reset || !session) {
           session = await freshSession()
           lastState = ''
           restoredUnverified = false
         }
 
+        // gated calls freeze the script while the human decides in the TUI;
+        // headless runs deny unless autoApprove opts in
+        const onApproval = async (request: ApprovalRequest): Promise<boolean> => {
+          if (options.autoApprove) return true
+          if (!ctx?.hasUI) return false
+          return ctx.ui.confirm(
+            `Approve ${request.tool}?`,
+            `The running ${toolName} script wants:\n${formatCall(request)}`,
+          )
+        }
+
         let streamed = ''
         const result = await session.run(params.code, {
           signal,
           mount,
+          onApproval,
           onPrint: (text) => {
             streamed += text
             onUpdate?.({
@@ -294,6 +334,15 @@ function formatValue(value: unknown): string {
   } catch {
     return String(value)
   }
+}
+
+function formatCall(request: ApprovalRequest): string {
+  const parts = [
+    ...request.args.map(formatValue),
+    ...Object.entries(request.kwargs).map(([k, v]) => `${k}=${formatValue(v)}`),
+  ]
+  const rendered = `${request.tool}(${parts.join(', ')})`
+  return rendered.length > 400 ? `${rendered.slice(0, 400)}…` : rendered
 }
 
 export default createPythonExtension()

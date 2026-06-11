@@ -9,6 +9,8 @@ export interface BuiltinToolsOptions {
   root: string
   /** Include the read_file tool. Disable when a workspace mount replaces it. Default true. */
   readFile?: boolean
+  /** Include the list_files tool. Disable when pi's bridged `ls` replaces it. Default true. */
+  listFiles?: boolean
   /** Cap on returned file bytes; longer files are truncated. Default 256 KiB. */
   maxFileBytes?: number
   /** Cap on returned HTTP body bytes. Default 256 KiB. */
@@ -138,7 +140,8 @@ export function createBuiltinTools(options: BuiltinToolsOptions): HostTool[] {
     },
   }
 
-  const tools = [listFilesTool, httpGetTool]
+  const tools = [httpGetTool]
+  if (options.listFiles ?? true) tools.unshift(listFilesTool)
   if (options.readFile ?? true) tools.unshift(readFileTool)
   return tools
 }

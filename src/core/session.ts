@@ -1,6 +1,6 @@
 import { CodeRunner } from './runner.js'
 import { ToolRegistry } from './registry.js'
-import type { HostTool, RunLimits, RunOptions, RunResult } from './types.js'
+import type { ApprovalRequest, HostTool, RunLimits, RunOptions, RunResult } from './types.js'
 
 interface Snippet {
   code: string
@@ -104,10 +104,21 @@ export class Session {
         }
       : undefined
 
+    // Replayed gated calls are served from the cache — no side effect can
+    // happen — so don't re-prompt for decisions the user already made.
+    const onApproval = options.onApproval
+      ? (request: ApprovalRequest) => {
+          const cached = callIndex < cacheBefore ? liveCalls[callIndex] : undefined
+          if (cached && cached.tool === request.tool) return true
+          return options.onApproval!(request)
+        }
+      : undefined
+
     const runner = new CodeRunner({ tools: wrapped, limits: this.limits, typeCheck: this.typeCheck })
     const result = await runner.run(combined, {
       ...options,
       onPrint,
+      onApproval,
       inputs: Object.keys(inputs).length > 0 ? inputs : undefined,
       lineOffset: transcriptLines + (options.lineOffset ?? 0),
     })
