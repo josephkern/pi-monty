@@ -154,6 +154,19 @@ describe('python pi extension', () => {
     expect(tool.description).not.toContain('/workspace')
   })
 
+  it('teaches the derived-vs-authored write split only when the bridge is on', async () => {
+    const grab = async (options: Parameters<typeof createPythonExtension>[0]) => {
+      const tools: { promptGuidelines?: string[] }[] = []
+      await createPythonExtension({ toolStore: false, ...options })({
+        registerTool: (t: unknown) => tools.push(t as (typeof tools)[number]),
+        on: () => {},
+      } as never)
+      return tools[0].promptGuidelines!.join('\n')
+    }
+    expect(await grab({ root: '/tmp' })).toContain('DERIVED content')
+    expect(await grab({ root: '/tmp', bridgePiTools: false })).not.toContain('DERIVED content')
+  })
+
   it('derives guideline examples from the actual registry', async () => {
     const tools: { promptGuidelines?: string[] }[] = []
     const api = {

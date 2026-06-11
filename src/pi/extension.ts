@@ -239,6 +239,11 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
       promptSnippet: `${toolName}: run sandboxed Python; host tools are callable as functions; state persists`,
       promptGuidelines: [
         `Use ${toolName} for multi-step tool workflows: loop/filter/aggregate in code and print only the result, instead of issuing many separate tool calls.`,
+        ...(bridge
+          ? [
+              `Route file changes by how the content is produced. DERIVED content — computed from data (manifests, indexes, conversions, extractions), the same mechanical transform across many files, or writes that must pass programmatic checks first — belongs inside ${toolName} via write()/edit(): code computes it exactly, verifies before writing, and each mutation is shown for approval. AUTHORED content — new code or prose you are composing, or a single judgment-driven edit — belongs in the regular edit/write tools.`,
+            ]
+          : []),
         ...(registry.list().length > 0
           ? [
               `Functions listed in the ${toolName} tool description (${registry
