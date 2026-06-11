@@ -1,6 +1,6 @@
 {
   "name": "pi-code-tool",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Code-mode tool for the pi coding agent: a sandboxed Python meta-tool (via @pydantic/monty) that lets the agent write code against host tools and build ephemeral code tools",
   "main": "./dist/index.js",
   "scripts": {
