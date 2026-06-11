@@ -77,14 +77,14 @@ describe('python pi extension', () => {
     expect(tool.description).not.toContain('def bash(')
   })
 
-  it('asks via ctx.ui.confirm for gated calls and honors the answer', async () => {
+  it('asks via ctx.ui.select for gated calls and honors the answer', async () => {
     const { tool } = await loadExtension({ root: process.cwd() })
-    const confirms: string[] = []
-    const makeCtx = (answer: boolean) => ({
+    const titles: string[] = []
+    const makeCtx = (answer: string) => ({
       hasUI: true,
       ui: {
-        confirm: async (_title: string, message: string) => {
-          confirms.push(message)
+        select: async (title: string, _options: string[]) => {
+          titles.push(title)
           return answer
         },
       },
@@ -94,20 +94,68 @@ describe('python pi extension', () => {
       { code: 'bash("echo hi")' },
       undefined,
       undefined,
-      makeCtx(false),
+      makeCtx('Deny'),
     )
     expect(denied.details.ok).toBe(false)
     expect(denied.content[0].text).toContain('PermissionError')
-    expect(confirms[0]).toContain('bash("echo hi")')
+    expect(titles[0]).toContain('bash("echo hi")')
 
     const approved = await tool.execute(
       't2',
       { code: 'bash("echo hi").strip()' },
       undefined,
       undefined,
-      makeCtx(true),
+      makeCtx('Approve'),
     )
     expect(approved.content[0].text).toContain('hi')
+  })
+
+  it('suspends on "Decide later" and resumes across a simulated restart', async () => {
+    const { tool, handlers } = await loadExtension({ root: process.cwd() })
+    const makeCtx = (answer: string) => ({
+      hasUI: true,
+      ui: { select: async () => answer },
+    })
+
+    const suspended = await tool.execute(
+      't1',
+      { code: 'pre = len("xy")\nout = bash("echo approved-later")\nf"{pre}:{out.strip()}"' },
+      undefined,
+      undefined,
+      makeCtx('Decide later (suspends the script, resumable any time)'),
+    )
+    expect(suspended.details.ok).toBe(false)
+    expect(suspended.content[0].text).toContain('[suspended]')
+    expect(suspended.content[0].text).toContain('"resume": true')
+
+    // restart pi: state (including the suspension) restores from details
+    const sessionStart = handlers.get('session_start')![0]
+    sessionStart(
+      {},
+      {
+        sessionManager: {
+          getBranch: () => [
+            { type: 'message', message: { toolName: 'code', details: suspended.details } },
+          ],
+        },
+      },
+    )
+
+    const resumed = await tool.execute(
+      't2',
+      { code: '', resume: true },
+      undefined,
+      undefined,
+      makeCtx('Approve'),
+    )
+    expect(resumed.details.ok).toBe(true)
+    expect(resumed.content[0].text).toContain('2:approved-later')
+  })
+
+  it('explains when there is nothing to resume', async () => {
+    const { tool } = await loadExtension({ noBuiltins: true, bridgePiTools: false })
+    const result = await tool.execute('t1', { code: '', resume: true })
+    expect(result.content[0].text).toContain('nothing is suspended')
   })
 
   it('denies gated calls headlessly unless autoApprove is set', async () => {

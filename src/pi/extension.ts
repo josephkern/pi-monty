@@ -87,20 +87,30 @@ const PythonParams = Type.Object({
       description: 'Discard all session state and reload saved tools before running.',
     }),
   ),
+  resume: Type.Optional(
+    Type.Boolean({
+      description:
+        'Re-run the snippet that was suspended awaiting approval (code is ignored). ' +
+        'Work done before the suspension is not repeated.',
+    }),
+  ),
 })
 
 export function createPythonExtension(options: PythonExtensionOptions = {}) {
   return async (pi: ExtensionAPI) => {
     const toolName = options.toolName ?? DEFAULT_TOOL_NAME
     const root = options.root ?? process.cwd()
-    let mount: MountDir | undefined
+    // One MountDir per run: monty rejects a mount shared with another live
+    // run, and suspended runs stay live (they hold their mount) until GC'd.
+    let makeMount: (() => MountDir) | undefined
     if (options.mountWorkspace ?? true) {
       try {
-        mount = new MountDir('/workspace', root, { mode: 'read-only' })
+        new MountDir('/workspace', root, { mode: 'read-only' }) // probe the root
+        makeMount = () => new MountDir('/workspace', root, { mode: 'read-only' })
       } catch {
         // root missing/unreadable: degrade to the read_file tool rather than
         // failing the whole extension load
-        mount = undefined
+        makeMount = undefined
       }
     }
     const bridge = options.bridgePiTools ?? true
@@ -110,7 +120,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
     }
     if (!options.noBuiltins) {
       // the mount replaces read_file with plain open(); bridged ls replaces list_files
-      for (const tool of createBuiltinTools({ root, readFile: !mount, listFiles: !bridge })) {
+      for (const tool of createBuiltinTools({ root, readFile: !makeMount, listFiles: !bridge })) {
         registry.add(tool)
       }
     }
@@ -123,9 +133,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
       // own MountDir — the suspended outer run still holds the shared one,
       // and monty rejects a mount attached to two runs at once.
       const validate = async (code: string): Promise<string | null> => {
-        const probeMount = mount
-          ? new MountDir('/workspace', root, { mode: 'read-only' })
-          : undefined
+        const probeMount = makeMount?.()
         const probe = await freshSession({ quiet: true, mount: probeMount })
         const result = await probe.run(code, { mount: probeMount })
         return result.ok ? null : ((result.error ?? 'unknown error').split('\n')[0] ?? null)
@@ -154,7 +162,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
     async function freshSession(
       opts: { quiet?: boolean; mount?: MountDir } = {},
     ): Promise<Session> {
-      const loadMount = opts.mount ?? mount
+      const loadMount = opts.mount ?? makeMount?.()
       const fresh = new Session(sessionOptions)
       if (!store) return fresh
       const saved = await store.list()
@@ -227,10 +235,10 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         renderPythonToolRules(probeImportableModules()),
         ...(gatedNames.length > 0
           ? [
-              `- Calls to ${gatedNames.join('/')} pause the script for per-call user approval; a denial raises PermissionError (catch it or stop gracefully). Group related work so the user approves meaningful units.`,
+              `- Calls to ${gatedNames.join('/')} pause the script for per-call user approval; a denial raises PermissionError (catch it or stop gracefully), and the user may suspend the script instead — resume later with {"resume": true}. Group related work so the user approves meaningful units.`,
             ]
           : []),
-        ...(mount
+        ...(makeMount
           ? [
               `- The workspace is mounted READ-ONLY at /workspace: read files with open("/workspace/<path>") or pathlib (paths from list_files are relative to it). Files are not iterable — use .read()/.readlines(); parse JSON with json.loads(text). Writes raise PermissionError; change real files with the regular edit/write tools.`,
             ]
@@ -268,20 +276,38 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         }
 
         // gated calls freeze the script while the human decides in the TUI;
+        // "decide later" suspends the run (resumable via resume=true, even
+        // after a restart — the suspension rides in the session state);
         // headless runs deny unless autoApprove opts in
-        const onApproval = async (request: ApprovalRequest): Promise<boolean> => {
+        const onApproval = async (request: ApprovalRequest): Promise<boolean | 'suspend'> => {
           if (options.autoApprove) return true
           if (!ctx?.hasUI) return false
-          return ctx.ui.confirm(
-            `Approve ${request.tool}?`,
-            `The running ${toolName} script wants:\n${formatCall(request)}`,
-          )
+          const choice = await ctx.ui.select(`Approve ${formatCall(request, 110)}?`, [
+            'Approve',
+            'Deny',
+            'Decide later (suspends the script, resumable any time)',
+          ])
+          if (choice === 'Approve') return true
+          if (choice?.startsWith('Decide later')) return 'suspend'
+          return false
+        }
+
+        let code = params.code
+        if (params.resume) {
+          const pending = session.suspendedCode
+          if (!pending) {
+            return {
+              content: [{ type: 'text', text: '(nothing is suspended — run code normally)' }],
+              details: { ok: false, state: lastState || session.dump(), calls: [] },
+            }
+          }
+          code = pending
         }
 
         let streamed = ''
-        const result = await session.run(params.code, {
+        const result = await session.run(code, {
           signal,
-          mount,
+          mount: makeMount?.(),
           onApproval,
           onPrint: (text) => {
             streamed += text
@@ -300,6 +326,11 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
             text += `=> ${formatValue(result.output)}`
           }
           if (!text) text = '(no output)'
+        } else if (result.errorKind === 'suspended') {
+          if (text && !text.endsWith('\n')) text += '\n'
+          text += `[suspended] The script is paused awaiting user approval of ${
+            result.suspendedCall ? formatCall(result.suspendedCall, 200) : 'a gated call'
+          }. Nothing after that call has run; completed work will not repeat. Once the user decides, call this tool with {"resume": true} to continue — this works even in a later session.`
         } else {
           if (text && !text.endsWith('\n')) text += '\n'
           text += result.error
@@ -317,8 +348,11 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         let finalText = truncation.content
         if (truncation.truncated) finalText += '\n[output truncated]'
 
-        // failed runs leave session state unchanged — reuse the last dump
-        if (result.ok || !lastState) lastState = session.dump()
+        // failed runs leave session state unchanged — reuse the last dump;
+        // suspensions DO change state (partial cache + pending snippet)
+        if (result.ok || result.errorKind === 'suspended' || !lastState) {
+          lastState = session.dump()
+        }
 
         return {
           content: [{ type: 'text', text: finalText }],
@@ -341,13 +375,13 @@ function formatValue(value: unknown): string {
   }
 }
 
-function formatCall(request: ApprovalRequest): string {
+function formatCall(request: ApprovalRequest, maxLength = 400): string {
   const parts = [
     ...request.args.map(formatValue),
     ...Object.entries(request.kwargs).map(([k, v]) => `${k}=${formatValue(v)}`),
   ]
   const rendered = `${request.tool}(${parts.join(', ')})`
-  return rendered.length > 400 ? `${rendered.slice(0, 400)}…` : rendered
+  return rendered.length > maxLength ? `${rendered.slice(0, maxLength)}…` : rendered
 }
 
 export default createPythonExtension()

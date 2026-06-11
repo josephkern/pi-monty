@@ -12,11 +12,19 @@ interface CachedCall {
   result: unknown
 }
 
+interface SuspendedRun {
+  /** The snippet abandoned at a gated call; resuming = re-running it. */
+  code: string
+  /** Cache length before the suspended run — the rollback point. */
+  cacheLen: number
+}
+
 interface SessionState {
   version: 1
   snippets: Snippet[]
   calls: CachedCall[]
   stdout: string
+  suspended?: SuspendedRun
 }
 
 export interface SessionOptions {
@@ -49,6 +57,7 @@ export class Session {
   private snippets: Snippet[] = []
   private calls: CachedCall[] = []
   private stdout = ''
+  private suspended: SuspendedRun | null = null
 
   constructor(options: SessionOptions = {}) {
     this.registry =
@@ -62,17 +71,33 @@ export class Session {
     return this.snippets.length
   }
 
+  /** The gated snippet awaiting a decision; re-run the same code to resume. */
+  get suspendedCode(): string | null {
+    return this.suspended?.code ?? null
+  }
+
   async run(code: string, options: RunOptions = {}): Promise<RunResult> {
+    // A suspended run resumes by re-running the same snippet: its executed
+    // calls stayed cached, so replay skips straight to the pending gated
+    // call. Running anything ELSE abandons the suspension and rolls those
+    // partial-run calls out of the cache to keep replay alignment.
+    const resuming = this.suspended !== null && this.suspended.code === code
+    if (this.suspended && !resuming) {
+      this.calls = this.calls.slice(0, this.suspended.cacheLen)
+    }
+    const rollbackTo = resuming ? this.suspended!.cacheLen : this.calls.length
+    this.suspended = null
+
     const transcript = this.snippets.map((s) => s.code.replace(/\n+$/, ''))
     const combined = [...transcript, code.replace(/\n+$/, '')].join('\n')
     const transcriptText = transcript.join('\n')
     const transcriptLines = transcriptText === '' ? 0 : transcriptText.split('\n').length
     const inputs = this.mergedInputs(options.inputs)
 
-    // Replay wrapper: serve the first N host-tool calls from the cache so
-    // side effects from earlier snippets don't run twice. Cache entries
-    // appended by this run are kept only if the run succeeds.
-    const cacheBefore = this.calls.length
+    // Replay wrapper: serve recorded host-tool calls from the cache so side
+    // effects never run twice. Cache entries appended by this run are kept
+    // only if the run succeeds or suspends.
+    const serveBefore = this.calls.length
     let callIndex = 0
     let served = 0
     const liveCalls = this.calls
@@ -81,7 +106,7 @@ export class Session {
         ...tool,
         execute: async (args: unknown[], kwargs: Record<string, unknown>) => {
           const index = callIndex++
-          const cached = index < cacheBefore ? liveCalls[index] : undefined
+          const cached = index < serveBefore ? liveCalls[index] : undefined
           if (cached && cached.tool === tool.name) {
             served++
             return cached.result
@@ -108,8 +133,8 @@ export class Session {
     // happen — so don't re-prompt for decisions the user already made.
     const onApproval = options.onApproval
       ? (request: ApprovalRequest) => {
-          const cached = callIndex < cacheBefore ? liveCalls[callIndex] : undefined
-          if (cached && cached.tool === request.tool) return true
+          const cached = callIndex < serveBefore ? liveCalls[callIndex] : undefined
+          if (cached && cached.tool === request.tool) return true as const
           return options.onApproval!(request)
         }
       : undefined
@@ -133,8 +158,11 @@ export class Session {
     if (result.ok) {
       this.snippets.push({ code, inputs: options.inputs })
       this.stdout = fullStdout
+    } else if (result.errorKind === 'suspended') {
+      // keep this run's executed calls cached so resuming doesn't repeat them
+      this.suspended = { code, cacheLen: rollbackTo }
     } else {
-      this.calls = this.calls.slice(0, cacheBefore)
+      this.calls = this.calls.slice(0, rollbackTo)
     }
     return result
   }
@@ -143,6 +171,7 @@ export class Session {
     this.snippets = []
     this.calls = []
     this.stdout = ''
+    this.suspended = null
   }
 
   dump(): string {
@@ -151,6 +180,7 @@ export class Session {
       snippets: this.snippets,
       calls: this.calls,
       stdout: this.stdout,
+      ...(this.suspended ? { suspended: this.suspended } : {}),
     }
     return JSON.stringify(state)
   }
@@ -162,6 +192,7 @@ export class Session {
     session.snippets = state.snippets
     session.calls = state.calls
     session.stdout = state.stdout
+    session.suspended = state.suspended ?? null
     return session
   }
 

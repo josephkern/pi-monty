@@ -72,6 +72,10 @@ pause/resume protocol, in-process.
   `json.loads(text)`), and `os.listdir`/`os.walk` don't exist. Read-only mode blocks
   writes, symlink escapes, and `..` traversal (all verified). Constructing a
   `MountDir` canonicalizes the host path and **throws if it doesn't exist**.
+- **Mounts do not survive `MontySnapshot.load()`** — `SnapshotLoadOptions` re-accepts
+  only a printCallback, so a dumped-and-restored run loses filesystem access
+  (post-resume mounted reads raise PermissionError). Durable resume should re-run
+  deterministically with a fresh mount instead of restoring VM bytes.
 - **A MountDir can't be attached to two runs at once** — a suspended run (paused at
   a host call) still holds its mount; a nested run reusing the same instance fails
   with `RuntimeError: mount 0 is already in use by another run`. Construct a fresh

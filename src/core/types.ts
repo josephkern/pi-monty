@@ -107,10 +107,15 @@ export interface RunOptions {
   /**
    * Decides gated (requiresApproval) host-tool calls. The script is paused
    * mid-execution while this resolves; returning false raises a catchable
-   * PermissionError in the sandbox. Gated calls are denied if omitted.
+   * PermissionError in the sandbox, and returning 'suspend' abandons the run
+   * before the call executes so it can be resumed later (see Session: re-run
+   * the same code and the replay cache picks up where it left off). Gated
+   * calls are denied if omitted.
    */
-  onApproval?: (request: ApprovalRequest) => boolean | Promise<boolean>
+  onApproval?: (request: ApprovalRequest) => ApprovalDecision | Promise<ApprovalDecision>
 }
+
+export type ApprovalDecision = boolean | 'suspend'
 
 export interface RunResult {
   ok: boolean
@@ -123,7 +128,9 @@ export interface RunResult {
   /** Model-facing failure description (Python traceback, syntax error, abort notice). */
   error?: string
   /** Kind of failure, when ok is false. */
-  errorKind?: 'syntax' | 'runtime' | 'typing' | 'aborted'
+  errorKind?: 'syntax' | 'runtime' | 'typing' | 'aborted' | 'suspended'
   /** Every host-tool call the code made, in order. */
   calls: ToolCallTrace[]
+  /** The gated call awaiting a decision, when errorKind is 'suspended'. */
+  suspendedCall?: ApprovalRequest
 }

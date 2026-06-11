@@ -42,9 +42,12 @@ it survives session restore and branching.
 **Mutating tools (`bash`, `edit`, `write`) are approval-gated**: the script freezes
 mid-execution at the call, pi shows a confirm dialog with the exact invocation, and
 your answer resumes the script in place — deny and the sandbox raises a catchable
-`PermissionError`. The model writes a 30-line codemod; you approve each mutation
-without it burning a single extra token. Replayed (already-approved) calls never
-re-prompt. Headless runs deny gated calls unless you opt in with `autoApprove`.
+`PermissionError`, or pick **"Decide later"** to suspend the run entirely: completed
+work stays cached, the suspension survives pi restarts, and `{"resume": true}`
+continues the script from the exact gated call — even days later. The model writes a
+30-line codemod; you approve each mutation without it burning a single extra token.
+Replayed (already-approved) calls never re-prompt. Headless runs deny gated calls
+unless you opt in with `autoApprove`.
 
 Code is **statically type-checked before execution** (monty's bundled `ty`) against
 typed stubs of every host tool — wrong argument types, bad methods on tool results,
@@ -132,7 +135,7 @@ side effects never repeat). `ToolStore` adds the saved-tools layer.
 
 ```bash
 npm install
-npm test            # vitest (92 tests)
+npm test            # vitest (99 tests)
 npm run typecheck
 npm run smoke       # verifies monty primitives on your machine
 npx tsx examples/demo.ts

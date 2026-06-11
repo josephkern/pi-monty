@@ -235,19 +235,30 @@ export class CodeRunner {
         const startedAt = performance.now()
         let denial: string | null = null
         if (tool.requiresApproval) {
+          const request = {
+            tool: tool.name,
+            args: snapshot.args,
+            kwargs: snapshot.kwargs,
+            description: tool.description,
+          }
           if (!options.onApproval) {
             trace.approved = false
             denial = `${tool.name} requires approval but no approver is configured`
           } else {
             // the script is frozen at this call while the human decides
-            const approved = await options.onApproval({
-              tool: tool.name,
-              args: snapshot.args,
-              kwargs: snapshot.kwargs,
-              description: tool.description,
-            })
-            trace.approved = approved
-            if (!approved) denial = `${tool.name} call denied by the user`
+            const decision = await options.onApproval(request)
+            if (decision === 'suspend') {
+              // abandon the run before the call executes; everything that DID
+              // execute is in `calls`, so a later re-run can replay up to here
+              const result = fail(
+                'suspended',
+                `suspended awaiting approval of ${tool.name}(...)`,
+              )
+              result.suspendedCall = request
+              return result
+            }
+            trace.approved = decision
+            if (!decision) denial = `${tool.name} call denied by the user`
           }
         }
         if (denial !== null) {

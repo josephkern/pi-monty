@@ -154,8 +154,11 @@ The general-purpose payoff: the agent builds its own toolbox.
 - ~~**Approval gates**~~ ✅ shipped in 0.3.0: `requiresApproval` host tools pause
   the script at the call (in-memory await; pi shows ctx.ui.confirm with the exact
   invocation); denial raises catchable PermissionError; replayed approvals never
-  re-prompt. The *durable* form (serialize the MontySnapshot to disk, resume in a
-  different process days later) remains open
+  re-prompt. **Durable form shipped in 0.4.0**: "Decide later" suspends the run —
+  executed calls stay in the replay cache, the suspension rides in session state
+  (survives pi restarts), and {"resume": true} re-runs the snippet, replaying
+  completed work and continuing live from the gate. (VM-snapshot serialization was
+  probed and rejected: mounts don't survive MontySnapshot.load — see research notes.)
 - **PII tokenization** at the bridge boundary
 - ~~Publish~~ ✅ on npm as `pi-code-tool` (pi.dev gallery via the pi-package keyword)
 
