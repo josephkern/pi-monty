@@ -15,6 +15,7 @@ import {
 } from '@earendil-works/pi-coding-agent'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
+import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import { MountDir } from '@pydantic/monty'
 import { probeImportableModules } from '../core/capabilities.js'
@@ -26,6 +27,17 @@ import { createPiBridgeTools } from './bridge.js'
 import type { ApprovalRequest, HostTool, RunLimits } from '../core/types.js'
 
 const DEFAULT_TOOL_NAME = 'code'
+
+/**
+ * Labels of the gated-call approval dialog. pi's `ctx.ui.select` returns the
+ * chosen label string, so these are load-bearing for routing the decision —
+ * tests and RPC drivers should import them rather than re-typing the text.
+ */
+export const APPROVAL_CHOICES = {
+  approve: 'Approve',
+  deny: 'Deny',
+  suspend: 'Decide later (suspends the script, resumable any time)',
+} as const
 
 export interface PythonExtensionOptions {
   /**
@@ -105,7 +117,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
     let makeMount: (() => MountDir) | undefined
     if (options.mountWorkspace ?? true) {
       try {
-        new MountDir('/workspace', root, { mode: 'read-only' }) // probe the root
+        if (!statSync(root).isDirectory()) throw new Error('not a directory')
         makeMount = () => new MountDir('/workspace', root, { mode: 'read-only' })
       } catch {
         // root missing/unreadable: degrade to the read_file tool rather than
@@ -153,20 +165,17 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
     // which is async, so creation happens lazily in execute().
     let session: Session | null = null
     let preludeNote = ''
-    // serialized state of the session as of the last successful run; reused
-    // for failed runs (state unchanged) so details don't re-serialize
-    let lastState = ''
     // set when state came from a previous conversation and hasn't run yet
     let restoredUnverified = false
 
     async function freshSession(
       opts: { quiet?: boolean; mount?: MountDir } = {},
     ): Promise<Session> {
-      const loadMount = opts.mount ?? makeMount?.()
       const fresh = new Session(sessionOptions)
       if (!store) return fresh
       const saved = await store.list()
       if (saved.length === 0) return fresh
+      const loadMount = opts.mount ?? makeMount?.()
       // Per-file loading, looping until the failed set stops shrinking: a
       // malformed file skips just that tool, and dependency chains load in
       // any order (monty resolves a function's globals only if they were
@@ -204,8 +213,14 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
           }
         }
       }
-      session = state ? Session.load(state, sessionOptions) : null
-      lastState = state ?? ''
+      try {
+        session = state ? Session.load(state, sessionOptions) : null
+      } catch {
+        // unreadable state (e.g. written by an incompatible version): start
+        // fresh rather than failing every session start
+        session = null
+        state = undefined
+      }
       restoredUnverified = Boolean(state)
     })
 
@@ -271,7 +286,6 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
       async execute(_toolCallId, params, signal, onUpdate, ctx) {
         if (params.reset || !session) {
           session = await freshSession()
-          lastState = ''
           restoredUnverified = false
         }
 
@@ -282,13 +296,13 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         const onApproval = async (request: ApprovalRequest): Promise<boolean | 'suspend'> => {
           if (options.autoApprove) return true
           if (!ctx?.hasUI) return false
-          const choice = await ctx.ui.select(`Approve ${formatCall(request, 110)}?`, [
-            'Approve',
-            'Deny',
-            'Decide later (suspends the script, resumable any time)',
+          const choice = await ctx.ui.select(`Approve ${formatCall(request)}?`, [
+            APPROVAL_CHOICES.approve,
+            APPROVAL_CHOICES.deny,
+            APPROVAL_CHOICES.suspend,
           ])
-          if (choice === 'Approve') return true
-          if (choice?.startsWith('Decide later')) return 'suspend'
+          if (choice === APPROVAL_CHOICES.approve) return true
+          if (choice === APPROVAL_CHOICES.suspend) return 'suspend'
           return false
         }
 
@@ -298,7 +312,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
           if (!pending) {
             return {
               content: [{ type: 'text', text: '(nothing is suspended — run code normally)' }],
-              details: { ok: false, state: lastState || session.dump(), calls: [] },
+              details: { ok: false, state: session.dump(), calls: [] },
             }
           }
           code = pending
@@ -318,7 +332,12 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
           },
         })
 
-        let text = preludeNote + result.stdout
+        // running new code while a script was suspended silently dropped its
+        // pending gated call — say so, or the user's "resume" later makes no sense
+        const abandonNote = result.abandonedSuspension
+          ? '[note: this run abandoned the previously suspended script — its pending gated call was discarded]\n'
+          : ''
+        let text = abandonNote + preludeNote + result.stdout
         preludeNote = ''
         if (result.ok) {
           if (result.output !== null && result.output !== undefined) {
@@ -348,17 +367,14 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         let finalText = truncation.content
         if (truncation.truncated) finalText += '\n[output truncated]'
 
-        // failed runs leave session state unchanged — reuse the last dump;
-        // suspensions DO change state (partial cache + pending snippet)
-        if (result.ok || result.errorKind === 'suspended' || !lastState) {
-          lastState = session.dump()
-        }
-
+        // dump unconditionally: failed runs can still change session state
+        // (consuming or abandoning a suspension), and enumerating which
+        // outcomes mutate it here would duplicate Session's rollback rules
         return {
           content: [{ type: 'text', text: finalText }],
           details: {
             ok: result.ok,
-            state: lastState,
+            state: session.dump(),
             calls: result.calls.map((c) => c.tool),
           } satisfies PythonDetails,
         }

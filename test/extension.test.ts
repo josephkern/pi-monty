@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createPythonExtension } from '../src/pi/extension.js'
+import { APPROVAL_CHOICES, createPythonExtension } from '../src/pi/extension.js'
 import type { HostTool } from '../src/index.js'
 
 type AnyTool = {
@@ -94,7 +94,7 @@ describe('python pi extension', () => {
       { code: 'bash("echo hi")' },
       undefined,
       undefined,
-      makeCtx('Deny'),
+      makeCtx(APPROVAL_CHOICES.deny),
     )
     expect(denied.details.ok).toBe(false)
     expect(denied.content[0].text).toContain('PermissionError')
@@ -105,9 +105,15 @@ describe('python pi extension', () => {
       { code: 'bash("echo hi").strip()' },
       undefined,
       undefined,
-      makeCtx('Approve'),
+      makeCtx(APPROVAL_CHOICES.approve),
     )
     expect(approved.content[0].text).toContain('hi')
+
+    // the dialog must show the whole call, not a 110-char prefix — the user
+    // approves what they can read
+    const long = `bash("echo start-${'x'.repeat(150)}-end")`
+    await tool.execute('t3', { code: long }, undefined, undefined, makeCtx(APPROVAL_CHOICES.deny))
+    expect(titles[2]).toContain('-end')
   })
 
   it('suspends on "Decide later" and resumes across a simulated restart', async () => {
@@ -122,7 +128,7 @@ describe('python pi extension', () => {
       { code: 'pre = len("xy")\nout = bash("echo approved-later")\nf"{pre}:{out.strip()}"' },
       undefined,
       undefined,
-      makeCtx('Decide later (suspends the script, resumable any time)'),
+      makeCtx(APPROVAL_CHOICES.suspend),
     )
     expect(suspended.details.ok).toBe(false)
     expect(suspended.content[0].text).toContain('[suspended]')
@@ -146,10 +152,47 @@ describe('python pi extension', () => {
       { code: '', resume: true },
       undefined,
       undefined,
-      makeCtx('Approve'),
+      makeCtx(APPROVAL_CHOICES.approve),
     )
     expect(resumed.details.ok).toBe(true)
     expect(resumed.content[0].text).toContain('2:approved-later')
+  })
+
+  it('persists the abandonment of a suspension even when the next run fails', async () => {
+    const { tool, handlers } = await loadExtension({ root: process.cwd() })
+    const makeCtx = (answer: string) => ({
+      hasUI: true,
+      ui: { select: async () => answer },
+    })
+
+    const suspended = await tool.execute(
+      't1',
+      { code: 'bash("echo pending")' },
+      undefined,
+      undefined,
+      makeCtx(APPROVAL_CHOICES.suspend),
+    )
+    expect(suspended.content[0].text).toContain('[suspended]')
+
+    // different code abandons the suspension — and tells the model so
+    const failed = await tool.execute('t2', { code: '1 / 0' })
+    expect(failed.content[0].text).toContain('abandoned the previously suspended script')
+    expect(failed.content[0].text).toContain('ZeroDivisionError')
+
+    // a restart restored from the FAILED run's details must not resurrect it
+    const sessionStart = handlers.get('session_start')![0]
+    sessionStart(
+      {},
+      {
+        sessionManager: {
+          getBranch: () => [
+            { type: 'message', message: { toolName: 'code', details: failed.details } },
+          ],
+        },
+      },
+    )
+    const resumed = await tool.execute('t3', { code: '', resume: true })
+    expect(resumed.content[0].text).toContain('nothing is suspended')
   })
 
   it('explains when there is nothing to resume', async () => {
@@ -252,7 +295,7 @@ describe('python pi extension', () => {
     expect(failedAgain.content[0].text).not.toContain('retry with reset=true')
   })
 
-  it('reuses the previous state dump for failed runs', async () => {
+  it('persists unchanged state for ordinary failed runs', async () => {
     const { tool } = await loadExtension({ noBuiltins: true })
     const ok = await tool.execute('t1', { code: 'x = 1' })
     const failed = await tool.execute('t2', { code: '1 / 0' })

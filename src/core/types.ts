@@ -133,4 +133,10 @@ export interface RunResult {
   calls: ToolCallTrace[]
   /** The gated call awaiting a decision, when errorKind is 'suspended'. */
   suspendedCall?: ApprovalRequest
+  /**
+   * Set by Session.run when this run's code replaced a pending suspension:
+   * the suspended snippet's partial work was rolled back and its pending
+   * gated call discarded.
+   */
+  abandonedSuspension?: boolean
 }

@@ -174,7 +174,7 @@ f"{pre}|{result}|{post}"`
     expect(executions).toHaveLength(0)
   })
 
-  it('running different code abandons the suspension cleanly', async () => {
+  it('running different code abandons the suspension cleanly and flags it', async () => {
     const { tool: gated } = gatedTool()
     const { tool: notify, log } = sideEffectTool()
     const session = new Session({ tools: [gated, notify] })
@@ -182,11 +182,179 @@ f"{pre}|{result}|{post}"`
 
     const other = await session.run('notify("fresh")')
     expect(other.ok).toBe(true)
+    expect(other.abandonedSuspension).toBe(true)
     expect(session.suspendedCode).toBeNull()
     // partial-run cache rolled back: 'before' re-executes if SNIPPET re-runs later
     expect(log).toEqual(['before', 'fresh'])
     const again = await session.run('notify("more")\nlen("x")')
     expect(again.ok).toBe(true)
+    expect(again.abandonedSuspension).toBeUndefined()
     expect(log).toEqual(['before', 'fresh', 'more'])
+  })
+
+  it('resumes when the code differs only by a trailing newline', async () => {
+    const { tool: gated, executions } = gatedTool()
+    const { tool: notify, log } = sideEffectTool()
+    const session = new Session({ tools: [gated, notify] })
+    await session.run(SNIPPET, { onApproval: () => 'suspend' })
+
+    const resumed = await session.run(`${SNIPPET}\n`, { onApproval: () => true })
+    expect(resumed.ok).toBe(true)
+    expect(resumed.abandonedSuspension).toBeUndefined()
+    expect(executions).toHaveLength(1)
+    expect(log).toEqual(['before', 'after']) // 'before' replayed, not re-executed
+  })
+
+  it('replays a caught denial without re-asking and keeps later calls aligned', async () => {
+    const targets: string[] = []
+    const deploy: HostTool = {
+      name: 'deploy',
+      description: 'Deploy a build.',
+      params: [{ name: 'target', type: 'str' }],
+      returns: 'str',
+      requiresApproval: true,
+      execute: ([target]) => {
+        targets.push(String(target))
+        return `deployed to ${target}`
+      },
+    }
+    const code = `try:
+    a = deploy("a")
+except PermissionError:
+    a = "denied"
+x = deploy("b")
+y = deploy("c")
+f"{a}|{x}|{y}"`
+    const session = new Session({ tools: [deploy] })
+
+    const asked: string[] = []
+    const plan: ('suspend' | boolean)[] = [false, true, 'suspend']
+    const suspended = await session.run(code, {
+      onApproval: (request) => {
+        asked.push(String(request.args[0]))
+        return plan.shift()!
+      },
+    })
+    expect(suspended.errorKind).toBe('suspended')
+    expect(asked).toEqual(['a', 'b', 'c'])
+    expect(targets).toEqual(['b'])
+
+    // resume: the denial of "a" replays (no re-ask, no flip to approval),
+    // "b" is served from the cache, only "c" is asked and executed
+    const askedOnResume: string[] = []
+    const resumed = await session.run(code, {
+      onApproval: (request) => {
+        askedOnResume.push(String(request.args[0]))
+        return true
+      },
+    })
+    expect(resumed.ok).toBe(true)
+    expect(askedOnResume).toEqual(['c'])
+    expect(targets).toEqual(['b', 'c'])
+    expect(resumed.output).toBe('denied|deployed to b|deployed to c')
+  })
+
+  it('a failed resume keeps executed work cached and restores the suspension', async () => {
+    const { tool: gated, executions } = gatedTool()
+    const { tool: notify, log } = sideEffectTool()
+    const session = new Session({ tools: [gated, notify] })
+    await session.run(SNIPPET, { onApproval: () => 'suspend' })
+
+    // deny on resume: the uncaught PermissionError fails the run, but the
+    // executed pre-gate call must stay cached and the suspension must survive
+    const denied = await session.run(SNIPPET, { onApproval: () => false })
+    expect(denied.ok).toBe(false)
+    expect(denied.error).toContain('PermissionError')
+    expect(session.suspendedCode).toBe(SNIPPET)
+    expect(log).toEqual(['before'])
+
+    // retrying re-asks the gate (the denial is not replayed) and the
+    // pre-gate side effect still does not repeat
+    let askedAgain = 0
+    const resumed = await session.run(SNIPPET, {
+      onApproval: () => {
+        askedAgain++
+        return true
+      },
+    })
+    expect(resumed.ok).toBe(true)
+    expect(askedAgain).toBe(1)
+    expect(executions).toHaveLength(1)
+    expect(log).toEqual(['before', 'after'])
+  })
+
+  it('does not re-emit pre-suspension stdout on resume', async () => {
+    const { tool: gated } = gatedTool()
+    const session = new Session({ tools: [gated] })
+    const code = 'print("progress")\ndeploy("prod")'
+
+    let streamed = ''
+    const suspended = await session.run(code, {
+      onApproval: () => 'suspend',
+      onPrint: (text) => {
+        streamed += text
+      },
+    })
+    expect(suspended.errorKind).toBe('suspended')
+    expect(suspended.stdout).toBe('progress\n')
+    expect(streamed).toBe('progress\n')
+
+    const resumed = await session.run(code, {
+      onApproval: () => true,
+      onPrint: (text) => {
+        streamed += text
+      },
+    })
+    expect(resumed.ok).toBe(true)
+    expect(resumed.stdout).toBe('') // 'progress' was already delivered
+    expect(streamed).toBe('progress\n')
+  })
+
+  it('preserves run inputs across suspension, dump, and resume', async () => {
+    const { tool: gated, executions } = gatedTool()
+    const session = new Session({ tools: [gated] })
+    const suspended = await session.run('deploy(target)', {
+      inputs: { target: 'prod' },
+      onApproval: () => 'suspend',
+    })
+    expect(suspended.errorKind).toBe('suspended')
+
+    const { tool: gated2, executions: executions2 } = gatedTool()
+    const restored = Session.load(session.dump(), { tools: [gated2] })
+    const resumed = await restored.run('deploy(target)', { onApproval: () => true })
+    expect(resumed.ok).toBe(true)
+    expect(resumed.output).toBe('deployed to prod')
+    expect(executions2).toHaveLength(1)
+    expect(executions).toHaveLength(0)
+  })
+
+  it('dumps version-2 state and still loads version-1 state', async () => {
+    const session = new Session()
+    await session.run('x = 1')
+    expect(JSON.parse(session.dump()).version).toBe(2)
+
+    const v1 = JSON.stringify({
+      version: 1,
+      snippets: [{ code: 'y = 41' }],
+      calls: [],
+      stdout: '',
+    })
+    const restored = Session.load(v1)
+    expect((await restored.run('y + 1')).output).toBe(42)
+
+    // a v0.4.x suspension (no stdout/key fields) still resumes
+    const { tool: gated, executions } = gatedTool()
+    const v1Suspended = JSON.stringify({
+      version: 1,
+      snippets: [],
+      calls: [],
+      stdout: '',
+      suspended: { code: 'deploy("prod")', cacheLen: 0 },
+    })
+    const withSuspension = Session.load(v1Suspended, { tools: [gated] })
+    expect(withSuspension.suspendedCode).toBe('deploy("prod")')
+    const resumed = await withSuspension.run('deploy("prod")', { onApproval: () => true })
+    expect(resumed.ok).toBe(true)
+    expect(executions).toHaveLength(1)
   })
 })

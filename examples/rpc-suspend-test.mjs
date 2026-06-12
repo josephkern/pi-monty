@@ -4,18 +4,19 @@
 //   phase 2: fresh pi process, same session → ask the model to resume →
 //            answer "Approve" → script completes → verify the file on disk
 //
-//   node examples/rpc-suspend-test.mjs
+//   npm run build && node examples/rpc-suspend-test.mjs
 import { spawn } from 'node:child_process'
 import { mkdirSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { createInterface } from 'node:readline'
+// dialog labels come from the extension so a wording change can't silently
+// turn this script's "Decide later" answer into a deny
+import { APPROVAL_CHOICES } from '../dist/pi/extension.js'
 
 const WORK = '/tmp/pi-suspend-e2e'
 const SESSIONS = `${WORK}/sessions`
 rmSync(WORK, { recursive: true, force: true })
 mkdirSync(SESSIONS, { recursive: true })
 mkdirSync(`${WORK}/data`, { recursive: true })
-
-const LATER = 'Decide later (suspends the script, resumable any time)'
 
 function runPhase({ continueSession, prompt, dialogAnswer, label }) {
   return new Promise((resolve, reject) => {
@@ -72,7 +73,7 @@ console.log('=== phase 1: trigger gated write, choose "Decide later", kill pi ==
 const phase1 = await runPhase({
   continueSession: false,
   label: 'phase1',
-  dialogAnswer: LATER,
+  dialogAnswer: APPROVAL_CHOICES.suspend,
   prompt:
     'Use the code tool in a single snippet: compute total = sum of 1..100, print it, ' +
     'then call write("data/total.txt", str(total)). Report what happens.',
@@ -86,7 +87,7 @@ console.log('=== phase 2: new pi process, resume, approve ===')
 const phase2 = await runPhase({
   continueSession: true,
   label: 'phase2',
-  dialogAnswer: 'Approve',
+  dialogAnswer: APPROVAL_CHOICES.approve,
   prompt: 'I approve now — resume the suspended code script.',
 })
 console.log(`[phase2] assistant: ${phase2.lastText.slice(0, 300)}`)
