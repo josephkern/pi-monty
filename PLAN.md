@@ -162,6 +162,52 @@ The general-purpose payoff: the agent builds its own toolbox.
 - **PII tokenization** at the bridge boundary
 - ~~Publish~~ ✅ on npm as `pi-code-tool` (pi.dev gallery via the pi-package keyword)
 
+## 1.0 plan (semver-major)
+
+0.5.0 fixed the suspend/resume bugs from the v0.4 code review at the patch level;
+three of that review's design findings can only be fixed by breaking the public
+API. Those are the core of the major:
+
+- **First-class result status**: replace `ok: boolean` + `errorKind: 'suspended'`
+  with `status: 'ok' | 'error' | 'suspended'` (error subtypes stay under
+  `status: 'error'`). Today three sites special-case the one "error" that isn't
+  an error, and any consumer keying off `ok` misclassifies a healthy paused run
+  as failed (pi session details persist `ok: false` for suspensions). A
+  discriminated union makes mishandling a type error.
+- **Explicit `session.resume(options)` / `session.abandon()`**: resume is
+  inferred by comparing the submitted code to the suspended snippet (trailing
+  newlines normalized since 0.5.0, but the ambiguity cuts both ways — a byte
+  difference silently abandons; identical code sent without resume intent
+  silently resumes). A first-class entry point owns the stored snippet and its
+  inputs; `run()` stops accepting same-code-as-resume.
+- **Suspension protected by construction**: with resume/abandon as real API,
+  `Session.run()` while suspended rejects (or requires explicit abandon) instead
+  of silently discarding the pending gate. 0.5.0 surfaces abandonment after the
+  fact; models ignore prompt-text protocol (see commit 972275a), so make it
+  self-enforcing.
+- **Extension tool schema cleanup**: make `code` optional so resume is just
+  `{"resume": true}` instead of a required-but-ignored parameter (possibly a
+  proper action enum for run/resume/reset). Breaking for RPC drivers.
+
+Bundle (same compatibility event):
+
+- **Session state v3 with delta encoding** — per-message dumps grow pi session
+  files O(n²) (slightly worse since 0.5.0: unconditional dumps + cache identity
+  keys); keep loading v1/v2.
+- **Specify the `RunResult.calls` contract** — replayed-vs-new attribution is
+  approximate after a replay divergence; pin it down while the result type is
+  being redesigned anyway.
+- **Stop leaking monty types** (`MountDir` in `RunOptions.mount`, limits config)
+  behind our own wrappers, so the 1.0 stability promise covers only our types.
+
+Caveat: monty is 0.0.x and expected to churn — either scope the 1.0 guarantee to
+our own API (hence the wrapping above) or ship this work as 0.6.0 and hold 1.0.0
+until monty stabilizes.
+
+Non-breaking riders that need not wait for the major: progressive disclosure
+(`search_tools`), PII tokenization, mounted-read size caps, cached post-prelude
+dump (see Post-MVP directions above).
+
 ## Deferred from the 0.2.0 code review (post-MVP)
 
 - mounted reads have no size cap (the 64 MiB heap limit is the backstop) and replay
@@ -170,7 +216,8 @@ The general-purpose payoff: the agent builds its own toolbox.
 - ty re-checks the full replayed transcript on every run (linear ms-scale growth);
   fine at session scale, revisit with transcript compaction
 - per-message session-state dumps grow pi session files O(n²) across a conversation
-  (failed runs now reuse the last dump; delta encoding would fix the rest)
+  (0.5.0 dumps unconditionally — failed runs can change state; delta encoding is
+  the real fix, planned for the 1.0 state v3)
 - saved-tool loading replays the session per file (O(N²) interpreter runs) — the
   price of correct dependency ordering; cache the post-prelude dump if it bites
 
