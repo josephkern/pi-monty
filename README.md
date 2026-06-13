@@ -65,10 +65,13 @@ $ pi
   ● Code
     data = json.loads(http_get("https://api.github.com/repos/pydantic/monty"))
     print(f"stars: {data['stargazers_count']}")
-    save_tool("gh_stars", '''
-    def gh_stars(repo):
-        return json.loads(http_get(f"https://api.github.com/repos/{repo}"))["stargazers_count"]
-    ''', "Return the GitHub star count for owner/repo.")
+    tool_code = (
+        "def gh_stars(repo):\n"
+        "    import json\n"
+        "    url = f'https://api.github.com/repos/{repo}'\n"
+        "    return json.loads(http_get(url))['stargazers_count']\n"
+    )
+    save_tool("gh_stars", tool_code, "Return the GitHub star count for owner/repo.")
 
 pydantic/monty currently has 1,234 stars. I saved gh_stars(repo) for future use.
 ```
@@ -96,10 +99,14 @@ import { createPythonExtension } from 'pi-code-tool/pi'
 
 export default createPythonExtension({
   toolName: 'code',              // rename if your model responds better to e.g. 'python'
+  root: process.cwd(),           // workspace root for mounts, file tools, and the default store
   mountWorkspace: true,          // false: no /workspace mount, read_file tool instead
-  typeCheck: true,               // false: skip the pre-execution type-check gate
   bridgePiTools: true,           // false: don't expose pi's read/grep/find/ls/bash/edit/write
+  noBuiltins: false,             // true: skip read_file/list_files/http_get starter tools
+  toolStore: '.pi/code-tools',   // false: disable save_tool/delete_tool/list/read helpers
+  typeCheck: true,               // false: skip the pre-execution type-check gate
   autoApprove: false,            // true: run bash/edit/write without asking (headless automation)
+  limits: { maxDurationSecs: 5, maxMemory: 64 * 1024 * 1024 },
   tools: [
     {
       name: 'query_db',
@@ -122,17 +129,19 @@ pi -e src/pi/extension.ts        # load straight from source, no build needed
 ## Use as a library
 
 ```ts
-import { CodeRunner, Session, ToolRegistry, createBuiltinTools } from './src/index.js'
+import { CodeRunner, createBuiltinTools } from 'pi-code-tool'
 
 const runner = new CodeRunner({ tools: createBuiltinTools({ root: process.cwd() }) })
 const result = await runner.run('len(list_files("."))')
-// result: { status: 'ok', output, stdout, calls }
+if (result.status === 'ok') console.log(result.output)
 ```
 
-`Session` adds persistent state across runs (replay with a tool-call cache — earlier
-side effects never repeat). If an approval gate suspends a run, call
-`session.resume()` to continue or `session.abandon()` to discard it before running
-new code. `ToolStore` adds the saved-tools layer.
+`RunResult` is a discriminated union with `status: 'ok' | 'error' | 'suspended'`,
+`stdout`, `stdoutTruncated`, and per-call traces. `Session` adds persistent state
+across runs (replay with a tool-call cache — earlier side effects never repeat) and
+serializes to JSON with `dump()` / `Session.load()`. If an approval gate suspends a
+run, call `session.resume()` to continue or `session.abandon()` to discard it before
+running new code. `ToolStore` adds the saved-tools layer.
 
 ## Develop
 

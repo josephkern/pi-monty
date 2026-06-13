@@ -49,7 +49,10 @@ explicitly *not* a security boundary), `docker`, `e2b`, `modal`, `blaxel`. All r
 ## Checklist for our design
 
 - Pluggable executor behind `{output, logs, isFinalAnswer}`.
-- Persistent namespace per session (monty's `MontyRepl` gives us this natively).
+- Persistent namespace per session. We initially expected monty's `MontyRepl` to give
+  this directly, but 0.0.18 cannot dispatch external functions or capture `print()`
+  from `feed()`, so this repo emulates persistence by replaying successful snippets
+  with a cached tool-call log.
 - print() as observation channel; truncate long output.
 - Errors as first-class observations with tracebacks.
 - `final_answer` sentinel + optional validators.

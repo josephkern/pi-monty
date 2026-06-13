@@ -60,7 +60,8 @@ Sources:
 5. Pause/resume bridge protocol when tools execute outside the sandbox.
 6. Capability-based sandbox: deny-all egress, credentials stay in the harness, fresh
    cheap isolation per execution.
-7. Async-parallel stubs so the model can fan out.
+7. Async-parallel stubs where the executor supports fan-out (monty 0.0.18 exposes one
+   pending external call at a time, so this repo's current bridge is sequential).
 8. Persistent workspace → emergent skills (saved, reusable code tools).
 9. Not free: route by workload shape; keep direct tool calling for sequential
    reasoning-dependent flows.

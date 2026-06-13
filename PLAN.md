@@ -16,8 +16,9 @@ API).
   filtering happen in the sandbox and intermediate data never enters model context.
 - monty gives us the hard part for free, in-process, no containers: deny-all sandbox,
   pause/resume interception of every tool call, resource limits, real tracebacks,
-  serializable session state (`MontyRepl.dump()`), and even cross-process resumable
-  snapshots (future: human-approval gates mid-execution).
+  and serializable interpreter/snapshot primitives. In practice, production sessions
+  persist a replay transcript + tool-call cache because `MontyRepl.feed()` cannot
+  dispatch host tools or capture print output in 0.0.18.
 - pi's `registerTool` extension API is a thin, clean host: streaming updates, session
   `details` for branch-safe state, project-local auto-discovery.
 
@@ -29,7 +30,7 @@ src/
 │   ├── types.ts             # HostTool, RunResult, ToolCallTrace, limits config
 │   ├── registry.ts          # ToolRegistry: host tools + prompt rendering (Python stubs)
 │   ├── runner.ts            # CodeRunner: owns the start/resume loop (NOT runMontyAsync)
-│   ├── session.ts           # Session: MontyRepl state, dump/load, injected variables
+│   ├── session.ts           # Session: transcript replay, call cache, JSON dump/load
 │   └── toolstore.ts         # Ephemeral tools: save/list/load named Python functions
 ├── pi/
 │   └── extension.ts         # pi adapter: registerTool("code", ...)
@@ -44,14 +45,16 @@ interface HostTool {
   name: string                 // python identifier
   description: string          // becomes the docstring
   params: { name: string; type: string; description?: string; optional?: boolean }[]
-  returns: string              // python type + shape description (code must deserialize!)
-  execute(args: unknown[], kwargs: Record<string, unknown>): Promise<unknown>
+  returns: string              // python return type expression
+  returnsDescription?: string  // shape/meaning of the return value
+  requiresApproval?: boolean   // pause before each call; denial raises PermissionError
+  execute(args: unknown[], kwargs: Record<string, unknown>): unknown | Promise<unknown>
 }
 
 type RunResult =
-  | { status: 'ok'; output: unknown; stdout: string; calls: ToolCallTrace[] }
-  | { status: 'error'; errorKind: 'syntax' | 'runtime' | 'typing' | 'aborted'; error: string; stdout: string; calls: ToolCallTrace[] }
-  | { status: 'suspended'; suspendedCall: ApprovalRequest; stdout: string; calls: ToolCallTrace[] }
+  | { status: 'ok'; output: unknown; stdout: string; stdoutTruncated: boolean; calls: ToolCallTrace[] }
+  | { status: 'error'; output: undefined; errorKind: 'syntax' | 'runtime' | 'typing' | 'aborted'; error: string; stdout: string; stdoutTruncated: boolean; calls: ToolCallTrace[] }
+  | { status: 'suspended'; output: undefined; error: string; suspendedCall: ApprovalRequest; stdout: string; stdoutTruncated: boolean; calls: ToolCallTrace[] }
 ```
 
 `CodeRunner` implements the `start()` → `MontySnapshot | MontyNameLookup | MontyComplete`
@@ -82,7 +85,7 @@ no classes/match statements; last expression is the result.
 
 ### M0 — Scaffolding & research ✅ (this commit)
 git repo, TypeScript + tsx, @pydantic/monty installed, research notes, smoke test
-verifying external functions, pause/resume, REPL dump/load, tracebacks, limits.
+verifying external functions, pause/resume, REPL dump/load behavior, tracebacks, limits.
 
 ### M1 — CodeRunner (core loop) ✅
 - start/resume loop with external-function dispatch (sync + async host tools),
@@ -95,7 +98,7 @@ verifying external functions, pause/resume, REPL dump/load, tracebacks, limits.
 
 ### M2 — ToolRegistry + prompt rendering ✅
 - `ToolRegistry` with name collision/identifier validation; `CodeRunner` delegates to it
-- Python stub + docstring rendering (`renderToolStub`, `PYTHON_TOOL_RULES`)
+- Python stub + docstring rendering (`renderToolStub`, `renderPythonToolRules`)
 - starter built-ins (`createBuiltinTools`): `read_file`/`list_files` rooted at a
   workspace dir (traversal- and symlink-escape-proof), `http_get` (host-side fetch —
   credentials stay outside the sandbox); Python-style positional-or-keyword args
@@ -104,7 +107,8 @@ verifying external functions, pause/resume, REPL dump/load, tracebacks, limits.
 - `MontyRepl` turned out unusable here: `feed()` supports neither external functions
   nor printCallback (0.0.18). `Session` instead **replays** the transcript of
   successful snippets in a fresh interpreter per run, serving prior host-tool calls
-  from a recorded cache (no repeated side effects); failed snippets roll back fully
+  from a recorded cache (no repeated side effects); failed snippets roll back namespace/cache
+  changes (host calls made before a failure may already have executed once)
 - per-run results show only the new stdout and new tool calls
 - `dump()/load()` is plain JSON — human-readable and branch-safe for pi `details`
 - inputs persist across snippets (smolagents `additional_args` pattern)
@@ -122,7 +126,7 @@ verifying external functions, pause/resume, REPL dump/load, tracebacks, limits.
 - typechecked against the real `@earendil-works/pi-coding-agent` types; tested via a
   mock ExtensionAPI; run live with `pi -e src/pi/extension.ts`
 - **live-verified 2026-06-10** with `pi --print -t python` against a local model:
-  multi-step code-mode task (list_files + read_file + compute in one snippet), then
+  multi-step code-mode task (file-helper calls + compute in one snippet), then
   the full M5 loop — agent wrote/tested/saved `slugify` via `save_tool`, and a fresh
   pi process auto-loaded and used it without defining it
 
@@ -131,10 +135,11 @@ The general-purpose payoff: the agent builds its own toolbox.
 - `save_tool(name, code, description)` host function — validates syntax (monty parse)
   and that the code defines `name`; stores plain `.py` files (first line
   `# <description>`) in `.pi/code-tools/` — user-inspectable and -editable
-- saved tools auto-load into fresh sessions as a prelude and are listed in the tool
-  description; `list_saved_tools()` / `read_tool(name)` / `delete_tool(name)` manage
-  the store from inside the sandbox; reserved (host-tool) names can't be shadowed
-- `reset=true` reloads saved tools mid-session; prelude failures degrade gracefully
+- saved tools auto-load into fresh sessions and are listed in the tool description;
+  `list_saved_tools()` / `read_tool(name)` / `delete_tool(name)` manage the store from
+  inside the sandbox; reserved (host-tool) names can't be shadowed
+- `reset=true` reloads saved tools mid-session; files load one at a time with retries
+  so dependency chains can settle and malformed tools are skipped gracefully
 
 ## Post-MVP directions
 
@@ -149,11 +154,11 @@ The general-purpose payoff: the agent builds its own toolbox.
 - ~~**Workspace mount**~~ ✅ shipped in 0.2.0: read-only `/workspace` MountDir
   replaces the `read_file` host tool (monty enforces read-only + escape protection)
 - ~~**Approval gates**~~ ✅ shipped in 0.3.0: `requiresApproval` host tools pause
-  the script at the call (in-memory await; pi shows ctx.ui.confirm with the exact
-  invocation); denial raises catchable PermissionError; replayed approvals never
-  re-prompt. **Durable form shipped in 0.4.0**: "Decide later" suspends the run —
-  executed calls stay in the replay cache, the suspension rides in session state
-  (survives pi restarts), and {"resume": true} continues via `Session.resume()`, replaying
+  the script at the call (pi shows an Approve/Deny/Decide-later `ctx.ui.select`
+  prompt with the exact invocation); denial raises catchable PermissionError;
+  replayed approvals never re-prompt. **Durable form shipped in 0.4.0**: "Decide
+  later" suspends the run — executed calls stay in the replay cache, the suspension
+  rides in session state (survives pi restarts), and {"resume": true} continues via `Session.resume()`, replaying
   completed work and continuing live from the gate; new code is rejected until the
   caller resumes, abandons, or resets. (VM-snapshot serialization was
   probed and rejected: mounts don't survive MontySnapshot.load — see research notes.)
@@ -162,14 +167,14 @@ The general-purpose payoff: the agent builds its own toolbox.
 
 ## 1.0 compatibility work (semver-major)
 
-Core breaking items are implemented in this branch:
+Core breaking items shipped in 0.6.0:
 
 - ✅ **First-class result status**: `RunResult` now uses `status: 'ok' | 'error' | 'suspended'`; error subtypes stay under `status: 'error'`.
 - ✅ **Explicit `session.resume(options)` / `session.abandon()`**: resume no longer depends on re-submitting identical code.
 - ✅ **Suspension protected by construction**: `Session.run()` rejects while suspended until the caller resumes, abandons, or resets.
 - ✅ **Extension tool schema cleanup**: `code` is optional so resume is just `{"resume": true}`; `{"abandon": true}` discards a pending suspension.
 
-Remaining riders for the same compatibility window:
+Remaining riders before a 1.0 compatibility promise:
 
 - **Session state v3 with delta encoding** — per-message dumps grow pi session
   files O(n²) (slightly worse since 0.5.0: unconditional dumps + cache identity
@@ -181,8 +186,8 @@ Remaining riders for the same compatibility window:
   behind our own wrappers, so the 1.0 stability promise covers only our types.
 
 Caveat: monty is 0.0.x and expected to churn — either scope the 1.0 guarantee to
-our own API (hence the wrapping above) or ship this work as 0.6.0 and hold 1.0.0
-until monty stabilizes.
+our own API (hence the wrapping above) or keep shipping 0.x releases and hold
+1.0.0 until monty stabilizes.
 
 Non-breaking riders that need not wait for the major: progressive disclosure
 (`search_tools`), PII tokenization, mounted-read size caps, cached post-prelude

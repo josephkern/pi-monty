@@ -3,7 +3,7 @@
  * 1. async external functions (the tool bridge)
  * 2. print() capture (the observation channel)
  * 3. the raw pause/resume state machine (per-call interception)
- * 4. MontyRepl persistent state + dump/load (session persistence)
+ * 4. MontyRepl pure-Python state + dump/load (production Session uses replay)
  * 5. runtime errors with Python tracebacks (model-facing error feedback)
  * 6. resource limits
  */
@@ -58,7 +58,7 @@ while (!(progress instanceof MontyComplete)) {
 }
 console.log('3   pause/resume:', JSON.stringify({ calls, output: progress.output }))
 
-// 4: REPL persistence + serialization round-trip
+// 4: REPL persistence + serialization round-trip for pure Python
 const repl = new MontyRepl()
 repl.feed('x = 41')
 const restored = MontyRepl.load(repl.dump())

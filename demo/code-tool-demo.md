@@ -20,9 +20,11 @@ pi -e src/pi/extension.ts
 
 ## Key idea
 
-`ls`, `grep`, `find`, `read`, `bash`, `edit`, and `write` are **not standalone pi tools** provided by this package.
+`ls`, `grep`, `find`, `read`, `bash`, `edit`, and `write` are **not standalone tools registered by this package**.
 
-They are Python helper functions that exist **only inside the `code` tool**.
+They are Python helper functions that exist **only inside the `code` tool**. pi may
+still have its own direct tools; this package bridges those tools into Python instead
+of registering another top-level `ls` or `grep`.
 
 Correct:
 
@@ -104,7 +106,7 @@ Prompt:
 Use the code tool to define and save a reusable Python function named repo_package_summary(path="package.json") that returns the package name and version from a package.json file. Then use it immediately.
 ```
 
-Expected model behavior:
+Expected model behavior (saved code should be self-contained, including any imports it needs):
 
 ```python
 code = '''

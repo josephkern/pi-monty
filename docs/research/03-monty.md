@@ -20,9 +20,10 @@ m.run({ inputs: { x: 1, y: 2 } })            // sync; returns last expression
 Three levels:
 
 1. **Sync**: `m.run({ externalFunctions: { add: (a, b) => a + b } })`
-2. **Async**: `runMontyAsync(m, { externalFunctions: { fetch_data: async (u) => ... },
-   printCallback: (stream, text) => ..., limits, mount, inputs })` — sandboxed Python can
-   `await fetch_data(url)`.
+2. **Async host handlers**: `runMontyAsync(m, { externalFunctions: { fetch_data: async (u) => ... },
+   printCallback: (stream, text) => ..., limits, mount, inputs })` awaits the JS handler
+   host-side, but in 0.0.18 sandboxed Python still calls `fetch_data(url)` without
+   `await` (see gotcha below).
 3. **Pause/resume state machine** (what runMontyAsync is built on):
 
 ```ts
@@ -96,10 +97,13 @@ pause/resume protocol, in-process.
 ### State, persistence, REPL
 
 - `MontyRepl` — incremental no-replay REPL: `repl.feed(code)` executes snippets against a
-  **persistent heap + namespace** (smolagents-style step persistence).
+  **persistent heap + namespace** for pure Python. In 0.0.18, `FeedOptions` has only
+  `mount`, so it cannot run our host-tool/print-capturing sessions.
 - Everything serializes to bytes: `Monty.dump/load` (parsed code), `MontySnapshot.dump/load`
-  (paused execution — resumable *in a different process*; durable-execution style),
-  `MontyRepl.dump/load` (whole session state).
+  (paused execution — resumable *in a different process* only when the needed runtime
+  resources can be restored), and `MontyRepl.dump/load` (whole REPL state). Production
+  `Session` state in this repo is its own JSON transcript + tool-call cache because
+  REPL feed lacks tool hooks and snapshots do not restore mounts.
 
 ### Limits and safety
 
@@ -115,10 +119,11 @@ limits: { maxAllocations, maxDurationSecs, maxMemory, maxRecursionDepth /*defaul
 ## Language coverage
 
 Supports a reasonable Python subset: functions, exceptions/tracebacks, kwargs, f-strings,
-async/await of external functions, comprehensions. **Importable modules (probed on
-0.0.18)**: `json`, `re`, `datetime`, `math`, `os`, `sys`, `typing`, `asyncio`,
-`pathlib` — and nothing else (`time`, `random`, `collections`, `itertools`, etc. all
-raise ModuleNotFoundError; ty also flags them pre-execution as `unresolved-import`).
+comprehensions, and limited async syntax. External tool calls must not be awaited in
+0.0.18. **Importable modules (probed on 0.0.18)**: `json`, `re`, `datetime`, `math`,
+`os`, `sys`, `typing`, `asyncio`, `pathlib` — and nothing else (`time`, `random`,
+`collections`, `itertools`, etc. all raise ModuleNotFoundError; ty also flags them
+pre-execution as `unresolved-import`).
 We probe at extension startup (`probeImportableModules`) and render the live list into
 the prompt. **Not yet**: class definitions, match statements, third-party packages.
 One pending external call at a time (no in-VM parallel tool calls).
@@ -127,7 +132,8 @@ One pending external call at a time (no in-VM parallel tool calls).
 
 - The `MontySnapshot`/`MontyNameLookup` loop lets us intercept every tool call with full
   control (logging, permissions, exceptions back into Python).
-- `MontyRepl.dump()` per pi session gives durable, branch-safe namespace persistence.
+- `Session.dump()` JSON per pi session gives durable, branch-safe persistence via
+  transcript replay and cached tool calls, rather than `MontyRepl.dump()`.
 - Type checking pre-execution (`typeCheckPrefixCode` with our tool stubs) can reject bad
   code before running it and return `ty` diagnostics to the model.
 - No classes/match yet → keep generated-code expectations modest; say so in the prompt.
