@@ -135,7 +135,7 @@ side effects never repeat). `ToolStore` adds the saved-tools layer.
 
 ```bash
 npm install
-npm test            # vitest (106 tests)
+npm test            # vitest (109 tests)
 npm run typecheck
 npm run smoke       # verifies monty primitives on your machine
 npx tsx examples/demo.ts

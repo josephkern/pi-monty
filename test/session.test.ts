@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Session } from '../src/index.js'
+import { HostToolError, Session } from '../src/index.js'
 import type { HostTool } from '../src/index.js'
 
 function spyTool(): { tool: HostTool; executions: unknown[][] } {
@@ -91,6 +91,33 @@ describe('Session', () => {
     expect(result.stdout).toBe('')
     expect(executions2).toHaveLength(0) // fully served from the restored cache
     expect(executions).toHaveLength(1)
+  })
+
+  it('does not re-execute caught host-tool failures during replay', async () => {
+    let attempts = 0
+    const flaky: HostTool = {
+      name: 'flaky',
+      description: 'Fails after a partial side effect.',
+      params: [],
+      returns: 'None',
+      execute: () => {
+        attempts++
+        throw new HostToolError('boom', 'ValueError')
+      },
+    }
+    const session = new Session({ tools: [flaky] })
+
+    const first = await session.run(
+      'try:\n    flaky()\nexcept ValueError:\n    handled = "ok"',
+    )
+    expect(first.ok).toBe(true)
+    expect(attempts).toBe(1)
+
+    const second = await session.run('handled')
+    expect(second.ok).toBe(true)
+    expect(second.output).toBe('ok')
+    expect(second.calls).toEqual([])
+    expect(attempts).toBe(1)
   })
 
   it('reset clears all state', async () => {

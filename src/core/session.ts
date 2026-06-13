@@ -1,5 +1,6 @@
 import { CodeRunner } from './runner.js'
 import { ToolRegistry } from './registry.js'
+import { HostToolError } from './types.js'
 import type { ApprovalRequest, HostTool, RunLimits, RunOptions, RunResult } from './types.js'
 
 interface Snippet {
@@ -12,6 +13,8 @@ interface CachedCall {
   /** JSON identity of the call's args/kwargs; absent in pre-v2 states (matches any). */
   key?: string
   result?: unknown
+  /** Host-tool exception raised into Python; replay re-raises the same exception. */
+  error?: { pythonType: string; message: string }
   /** The user denied this gated call; replay re-raises without re-prompting. */
   denied?: true
 }
@@ -139,12 +142,22 @@ export class Session {
           if (entry && !entry.denied && matches(entry, tool.name, key)) {
             cursor++
             served++
+            if (entry.error) {
+              throw new HostToolError(entry.error.message, entry.error.pythonType)
+            }
             return entry.result
           }
           if (entry) diverge()
-          const result = await tool.execute(args, kwargs)
-          liveCalls.push({ tool: tool.name, key, result })
-          return result
+          try {
+            const result = await tool.execute(args, kwargs)
+            liveCalls.push({ tool: tool.name, key, result })
+            return result
+          } catch (e) {
+            const err = e instanceof Error ? e : new Error(String(e))
+            const pythonType = err instanceof HostToolError ? err.pythonType : 'RuntimeError'
+            liveCalls.push({ tool: tool.name, key, error: { pythonType, message: err.message } })
+            throw e
+          }
         },
       })),
     )

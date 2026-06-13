@@ -68,7 +68,7 @@ function wrapPiTool(tool: PiTool, requiresApproval: boolean): HostTool {
     description: firstSentences(tool.description),
     params,
     returns: 'str',
-    returnsDescription: 'the tool output as text',
+    returnsDescription: piToolReturnsDescription(tool.name),
     requiresApproval,
     async execute(args, kwargs) {
       const input: Record<string, unknown> = {}
@@ -92,6 +92,22 @@ function wrapPiTool(tool: PiTool, requiresApproval: boolean): HostTool {
         .join('\n')
     },
   }
+}
+
+const PI_TOOL_RETURN_DESCRIPTIONS: Record<string, string> = {
+  read:
+    'file contents as text, with pi truncation markers for large text files; non-text blocks are represented as markers like [image]',
+  grep:
+    'newline-delimited matching lines with file paths and line numbers, plus pi truncation/no-match messages when applicable',
+  find: 'newline-delimited matching file paths relative to the search directory, with pi truncation messages when applicable',
+  ls: 'newline-delimited directory entries sorted alphabetically; directories end with "/"',
+  bash: 'combined stdout/stderr text and command status/truncation messages from pi',
+  edit: 'human-readable edit success or failure summary from pi',
+  write: 'human-readable write success or failure summary from pi',
+}
+
+function piToolReturnsDescription(name: string): string {
+  return PI_TOOL_RETURN_DESCRIPTIONS[name] ?? `text output from pi's ${name} tool; inspect it before parsing if uncertain`
 }
 
 function schemaToParams(schema: PiTool['parameters']): HostToolParam[] {

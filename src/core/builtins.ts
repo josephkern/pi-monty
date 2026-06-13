@@ -1,4 +1,4 @@
-import { readFile, readdir, realpath } from 'node:fs/promises'
+import { open, readdir, realpath } from 'node:fs/promises'
 import { isAbsolute, resolve, sep } from 'node:path'
 import { arg, requireString } from './args.js'
 import { HostToolError } from './types.js'
@@ -25,6 +25,52 @@ const TRUNCATION_MARKER = '\n[...truncated]'
 function truncate(text: string, maxBytes: number): string {
   if (Buffer.byteLength(text) <= maxBytes) return text
   return Buffer.from(text).subarray(0, maxBytes).toString() + TRUNCATION_MARKER
+}
+
+async function readUtf8FileLimited(path: string, maxBytes: number): Promise<string> {
+  const handle = await open(path, 'r')
+  try {
+    const buffer = Buffer.alloc(maxBytes + 1)
+    const { bytesRead } = await handle.read(buffer, 0, maxBytes + 1, 0)
+    const truncated = bytesRead > maxBytes
+    return buffer.subarray(0, truncated ? maxBytes : bytesRead).toString() + (truncated ? TRUNCATION_MARKER : '')
+  } finally {
+    await handle.close()
+  }
+}
+
+async function readResponseTextLimited(response: Response, maxBytes: number): Promise<string> {
+  const reader = response.body?.getReader()
+  if (!reader) return truncate(await response.text(), maxBytes)
+
+  const chunks: Uint8Array[] = []
+  let collected = 0
+  let truncated = false
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const chunk = value ?? new Uint8Array()
+      const remaining = maxBytes - collected
+      if (chunk.byteLength > remaining) {
+        if (remaining > 0) chunks.push(chunk.subarray(0, remaining))
+        truncated = true
+        break
+      }
+      chunks.push(chunk)
+      collected += chunk.byteLength
+      if (collected === maxBytes) {
+        const next = await reader.read()
+        truncated = !next.done
+        break
+      }
+    }
+  } finally {
+    if (truncated) await reader.cancel().catch(() => {})
+    reader.releaseLock()
+  }
+
+  return Buffer.concat(chunks).toString() + (truncated ? TRUNCATION_MARKER : '')
 }
 
 /**
@@ -73,7 +119,7 @@ export function createBuiltinTools(options: BuiltinToolsOptions): HostTool[] {
       const path = requireString(arg(args, kwargs, 0, 'path'), 'path')
       const real = await resolveInRoot(path)
       try {
-        return truncate(await readFile(real, 'utf8'), maxFileBytes)
+        return await readUtf8FileLimited(real, maxFileBytes)
       } catch (e) {
         const err = e as NodeJS.ErrnoException
         if (err.code === 'EISDIR') {
@@ -136,7 +182,7 @@ export function createBuiltinTools(options: BuiltinToolsOptions): HostTool[] {
       if (!response.ok) {
         throw new HostToolError(`HTTP ${response.status} for ${url}`, 'OSError')
       }
-      return truncate(await response.text(), maxHttpBytes)
+      return await readResponseTextLimited(response, maxHttpBytes)
     },
   }
 

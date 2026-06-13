@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { CodeRunner } from '../src/index.js'
+import { CodeRunner, renderToolStub } from '../src/index.js'
 import type { HostTool } from '../src/index.js'
 import { createPiBridgeTools } from '../src/pi/bridge.js'
 
@@ -39,12 +39,17 @@ describe('createPiBridgeTools', () => {
     }
   })
 
-  it('converts Typebox schemas to Python params', () => {
+  it('converts Typebox schemas to Python params and documents return formats', () => {
     const read = tool('read')
     const path = read.params.find((p) => p.name === 'path')
     expect(path).toMatchObject({ type: 'str', optional: false })
     expect(read.params.length).toBeGreaterThan(1) // offset/limit etc.
     expect(read.returns).toBe('str')
+    expect(read.returnsDescription).toContain('file contents')
+
+    const grep = tool('grep')
+    expect(grep.returnsDescription).toContain('matching lines')
+    expect(renderToolStub(grep)).toContain('Returns:\n        str: newline-delimited matching lines')
   })
 
   it('reads files through the bridged read tool', async () => {

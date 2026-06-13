@@ -42,6 +42,7 @@ export class ToolStore {
   }
 
   async get(name: string): Promise<SavedTool | undefined> {
+    if (!IDENTIFIER.test(name)) return undefined
     try {
       return parseToolFile(name, await readFile(join(this.dir, `${name}.py`), 'utf8'))
     } catch (e) {
@@ -124,6 +125,7 @@ export class ToolStore {
         { name: 'description', type: 'str', description: 'One line: what it does, args, returns.' },
       ],
       returns: 'str',
+      returnsDescription: 'confirmation string naming the saved tool',
       execute: async (args, kwargs) => {
         const name = requireString(arg(args, kwargs, 0, 'name'), 'name')
         const code = requireString(arg(args, kwargs, 1, 'code'), 'code')
@@ -151,6 +153,7 @@ export class ToolStore {
       description: 'Delete a previously saved tool.',
       params: [{ name: 'name', type: 'str' }],
       returns: 'str',
+      returnsDescription: 'confirmation string naming the deleted tool',
       execute: async (args, kwargs) => {
         const name = requireString(arg(args, kwargs, 0, 'name'), 'name')
         if (!(await this.delete(name))) {
@@ -175,6 +178,7 @@ export class ToolStore {
       description: 'Read the source code of a saved tool.',
       params: [{ name: 'name', type: 'str' }],
       returns: 'str',
+      returnsDescription: 'Python source code for the saved tool, excluding the description header',
       execute: async (args, kwargs) => {
         const name = requireString(arg(args, kwargs, 0, 'name'), 'name')
         const tool = await this.get(name)

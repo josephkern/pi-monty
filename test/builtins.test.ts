@@ -91,6 +91,26 @@ describe('http_get', () => {
     expect(await httpGet.execute(['https://x.test/a'], {})).toBe('body for https://x.test/a')
   })
 
+  it('truncates streaming responses without reading the whole body', async () => {
+    let canceled = false
+    const fakeStreamingFetch = (async () => {
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('hello'))
+          controller.enqueue(new TextEncoder().encode(' world'))
+        },
+        cancel() {
+          canceled = true
+        },
+      })
+      return new Response(stream)
+    }) as typeof fetch
+    const [, , httpGet] = createBuiltinTools({ root, fetchImpl: fakeStreamingFetch, maxHttpBytes: 5 })
+
+    expect(await httpGet.execute(['https://x.test/large'], {})).toBe('hello\n[...truncated]')
+    expect(canceled).toBe(true)
+  })
+
   it('raises OSError on HTTP errors and ValueError on bad schemes', async () => {
     const [, , httpGet] = createBuiltinTools({ root, fetchImpl: fakeFetch })
     await expect(httpGet.execute(['https://x.test/missing'], {})).rejects.toMatchObject({

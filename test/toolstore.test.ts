@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -51,9 +51,26 @@ describe('ToolStore', () => {
     expect(await store.list()).toEqual([])
   })
 
+  it('does not read outside the store for invalid tool names', async () => {
+    const nested = join(dir, 'tools')
+    await mkdir(nested)
+    await writeFile(join(dir, 'secret.py'), 'def secret():\n    return "hidden"\n')
+    const store = new ToolStore(nested)
+
+    expect(await store.get('../secret')).toBeUndefined()
+
+    const session = new Session({ tools: store.hostTools(() => false) })
+    const result = await session.run('read_tool("../secret")')
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain("no saved tool named '../secret'")
+  })
+
   it('exposes host tools that manage the store from inside the sandbox', async () => {
     const store = new ToolStore(dir)
-    const session = new Session({ tools: store.hostTools(() => false) })
+    const hostTools = store.hostTools(() => false)
+    expect(hostTools.every((tool) => tool.returnsDescription)).toBe(true)
+    expect(hostTools.find((tool) => tool.name === 'read_tool')?.returnsDescription).toContain('Python source')
+    const session = new Session({ tools: hostTools })
 
     const saved = await session.run(
       `code = 'def shout(text):\\n    return text.upper() + "!"'
