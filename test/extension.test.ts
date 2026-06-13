@@ -7,7 +7,7 @@ type AnyTool = {
   description: string
   execute: (
     id: string,
-    params: { code: string; reset?: boolean },
+    params: { code?: string; reset?: boolean; resume?: boolean; abandon?: boolean },
     signal?: AbortSignal,
     onUpdate?: (partial: unknown) => void,
     ctx?: unknown,
@@ -99,7 +99,7 @@ describe('python pi extension', () => {
       undefined,
       makeCtx(APPROVAL_CHOICES.deny),
     )
-    expect(denied.details.ok).toBe(false)
+    expect(denied.details.status).not.toBe('ok')
     expect(denied.content[0].text).toContain('PermissionError')
     expect(titles[0]).toContain('bash("echo hi")')
 
@@ -133,7 +133,7 @@ describe('python pi extension', () => {
       undefined,
       makeCtx(APPROVAL_CHOICES.suspend),
     )
-    expect(suspended.details.ok).toBe(false)
+    expect(suspended.details.status).not.toBe('ok')
     expect(suspended.content[0].text).toContain('[suspended]')
     expect(suspended.content[0].text).toContain('"resume": true')
 
@@ -152,16 +152,16 @@ describe('python pi extension', () => {
 
     const resumed = await tool.execute(
       't2',
-      { code: '', resume: true },
+      { resume: true },
       undefined,
       undefined,
       makeCtx(APPROVAL_CHOICES.approve),
     )
-    expect(resumed.details.ok).toBe(true)
+    expect(resumed.details.status).toBe('ok')
     expect(resumed.content[0].text).toContain('2:approved-later')
   })
 
-  it('persists the abandonment of a suspension even when the next run fails', async () => {
+  it('persists explicit abandonment of a suspension even when the next run fails', async () => {
     const { tool, handlers } = await loadExtension({ root: process.cwd() })
     const makeCtx = (answer: string) => ({
       hasUI: true,
@@ -177,9 +177,14 @@ describe('python pi extension', () => {
     )
     expect(suspended.content[0].text).toContain('[suspended]')
 
-    // different code abandons the suspension — and tells the model so
-    const failed = await tool.execute('t2', { code: '1 / 0' })
-    expect(failed.content[0].text).toContain('abandoned the previously suspended script')
+    // different code is rejected while the suspension is protected
+    const blocked = await tool.execute('t2', { code: '1 / 0' })
+    expect(blocked.content[0].text).toContain('script is suspended')
+    expect(blocked.content[0].text).toContain('new code was not run')
+
+    // explicit abandon discards the suspension, then the requested code runs
+    const failed = await tool.execute('t3', { abandon: true, code: '1 / 0' })
+    expect(failed.content[0].text).toContain('discarded the previously suspended script')
     expect(failed.content[0].text).toContain('ZeroDivisionError')
 
     // a restart restored from the FAILED run's details must not resurrect it
@@ -194,13 +199,13 @@ describe('python pi extension', () => {
         },
       },
     )
-    const resumed = await tool.execute('t3', { code: '', resume: true })
+    const resumed = await tool.execute('t4', { resume: true })
     expect(resumed.content[0].text).toContain('nothing is suspended')
   })
 
   it('explains when there is nothing to resume', async () => {
     const { tool } = await loadExtension({ noBuiltins: true, bridgePiTools: false })
-    const result = await tool.execute('t1', { code: '', resume: true })
+    const result = await tool.execute('t1', { resume: true })
     expect(result.content[0].text).toContain('nothing is suspended')
   })
 
@@ -213,7 +218,7 @@ describe('python pi extension', () => {
       undefined,
       { hasUI: false, ui: {} },
     )
-    expect(headless.details.ok).toBe(false)
+    expect(headless.details.status).not.toBe('ok')
     expect(headless.content[0].text).toContain('PermissionError')
 
     const { tool: auto } = await loadExtension({ root: process.cwd(), autoApprove: true })
@@ -310,7 +315,7 @@ describe('python pi extension', () => {
     const result = await tool.execute('t1', {
       code: 'open("/workspace/evil.txt", "w").write("x")',
     })
-    expect(result.details.ok).toBe(false)
+    expect(result.details.status).not.toBe('ok')
     expect(result.content[0].text).toContain('PermissionError')
   })
 
@@ -318,7 +323,7 @@ describe('python pi extension', () => {
     const { tool } = await loadExtension({ tools: [greet], noBuiltins: true })
     const first = await tool.execute('t1', { code: 'msg = greet("pi")\nmsg' })
     expect(first.content[0].text).toBe('=> "hello pi"')
-    expect(first.details.ok).toBe(true)
+    expect(first.details.status).toBe('ok')
     expect(first.details.calls).toEqual(['greet'])
 
     const second = await tool.execute('t2', { code: 'msg.upper()' })
@@ -344,7 +349,7 @@ describe('python pi extension', () => {
   it('returns tracebacks as content, not a throw', async () => {
     const { tool } = await loadExtension({ noBuiltins: true })
     const result = await tool.execute('t1', { code: '1 / 0' })
-    expect(result.details.ok).toBe(false)
+    expect(result.details.status).not.toBe('ok')
     expect(result.content[0].text).toContain('ZeroDivisionError')
   })
 
@@ -352,7 +357,7 @@ describe('python pi extension', () => {
     const { tool } = await loadExtension({ noBuiltins: true })
     await tool.execute('t1', { code: 'x = 1' })
     const result = await tool.execute('t2', { code: 'x', reset: true })
-    expect(result.details.ok).toBe(false)
+    expect(result.details.status).not.toBe('ok')
     expect(result.content[0].text).toContain('not defined')
   })
 
@@ -394,7 +399,7 @@ describe('python pi extension', () => {
     )
 
     const result = await tool.execute('t2', { code: 'x' })
-    expect(result.details.ok).toBe(false)
+    expect(result.details.status).not.toBe('ok')
     expect(result.content[0].text).toContain('not defined')
   })
 })

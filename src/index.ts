@@ -14,8 +14,12 @@ export type {
   ApprovalRequest,
   HostTool,
   HostToolParam,
+  RunError,
+  RunErrorKind,
   RunLimits,
   RunOptions,
   RunResult,
+  RunSuccess,
+  RunSuspended,
   ToolCallTrace,
 } from './core/types.js'

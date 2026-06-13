@@ -24,7 +24,7 @@ import { createBuiltinTools } from '../core/builtins.js'
 import { Session } from '../core/session.js'
 import { ToolStore } from '../core/toolstore.js'
 import { createPiBridgeTools } from './bridge.js'
-import type { ApprovalRequest, HostTool, RunLimits } from '../core/types.js'
+import type { ApprovalRequest, HostTool, RunLimits, RunResult } from '../core/types.js'
 
 const DEFAULT_TOOL_NAME = 'code'
 
@@ -82,7 +82,7 @@ export interface PythonExtensionOptions {
 }
 
 interface PythonDetails {
-  ok: boolean
+  status: RunResult['status']
   /** Serialized Session (JSON) for branch-safe restore. */
   state: string
   /** Names of host tools called by this snippet. */
@@ -90,10 +90,12 @@ interface PythonDetails {
 }
 
 const PythonParams = Type.Object({
-  code: Type.String({
-    description:
-      'Python code to run. The value of the last top-level expression is returned.',
-  }),
+  code: Type.Optional(
+    Type.String({
+      description:
+        'Python code to run. Required unless resume=true. The value of the last top-level expression is returned.',
+    }),
+  ),
   reset: Type.Optional(
     Type.Boolean({
       description: 'Discard all session state and reload saved tools before running.',
@@ -102,8 +104,13 @@ const PythonParams = Type.Object({
   resume: Type.Optional(
     Type.Boolean({
       description:
-        'Re-run the snippet that was suspended awaiting approval (code is ignored). ' +
-        'Work done before the suspension is not repeated.',
+        'Resume the snippet that was suspended awaiting approval. Work done before ' +
+        'the suspension is not repeated; code is ignored and may be omitted.',
+    }),
+  ),
+  abandon: Type.Optional(
+    Type.Boolean({
+      description: 'Discard a suspended snippet without resetting the rest of the session.',
     }),
   ),
 })
@@ -148,7 +155,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         const probeMount = makeMount?.()
         const probe = await freshSession({ quiet: true, mount: probeMount })
         const result = await probe.run(code, { mount: probeMount })
-        return result.ok ? null : ((result.error ?? 'unknown error').split('\n')[0] ?? null)
+        return result.status === 'ok' ? null : ((result.error ?? 'unknown error').split('\n')[0] ?? null)
       }
       for (const tool of store.hostTools((name) => registry.has(name), validate)) {
         registry.add(tool)
@@ -186,7 +193,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         const failed: typeof pending = []
         for (const tool of pending) {
           const loaded = await fresh.run(tool.code, { mount: loadMount })
-          if (!loaded.ok) failed.push({ ...tool, error: (loaded.error ?? '').split('\n')[0] })
+          if (loaded.status !== 'ok') failed.push({ ...tool, error: (loaded.error ?? '').split('\n')[0] })
         }
         if (failed.length === pending.length) {
           if (!opts.quiet) {
@@ -251,7 +258,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         renderPythonToolRules(probeImportableModules()),
         ...(gatedNames.length > 0
           ? [
-              `- Calls to ${gatedNames.join('/')} pause the script for per-call user approval; a denial raises PermissionError (catch it or stop gracefully), and the user may suspend the script instead — resume later with {"resume": true}. Group related work so the user approves meaningful units.`,
+              `- Calls to ${gatedNames.join('/')} pause the script for per-call user approval; a denial raises PermissionError (catch it or stop gracefully), and the user may suspend the script instead — resume later with {"resume": true}, or discard it with {"abandon": true}. Group related work so the user approves meaningful units.`,
             ]
           : []),
         ...(makeMount
@@ -303,50 +310,89 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
           return false
         }
 
-        let code = params.code
-        if (params.resume) {
-          const pending = session.suspendedCode
-          if (!pending) {
-            return {
-              content: [{ type: 'text', text: '(nothing is suspended — run code normally)' }],
-              details: { ok: false, state: session.dump(), calls: [] },
-            }
+        if (params.resume && params.abandon) {
+          return {
+            content: [{ type: 'text', text: '(choose either resume=true or abandon=true, not both)' }],
+            details: { status: 'error', state: session.dump(), calls: [] } satisfies PythonDetails,
           }
-          code = pending
+        }
+
+        const abandoned = params.abandon ? session.abandon() : false
+        if (params.abandon && params.code === undefined && !params.resume) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: abandoned ? '(suspended script abandoned)' : '(nothing is suspended)',
+              },
+            ],
+            details: { status: 'ok', state: session.dump(), calls: [] } satisfies PythonDetails,
+          }
         }
 
         let streamed = ''
-        const result = await session.run(code, {
+        const runOptions = {
           signal,
           mount: makeMount?.(),
           onApproval,
-          onPrint: (text) => {
+          onPrint: (text: string) => {
             streamed += text
             onUpdate?.({
               content: [{ type: 'text', text: streamed }],
-              details: { ok: true, state: '', calls: [] },
+              details: { status: 'ok', state: '', calls: [] } satisfies PythonDetails,
             })
           },
-        })
+        }
 
-        // running new code while a script was suspended silently dropped its
-        // pending gated call — say so, or the user's "resume" later makes no sense
-        const abandonNote = result.abandonedSuspension
-          ? '[note: this run abandoned the previously suspended script — its pending gated call was discarded]\n'
+        let result: RunResult
+        if (params.resume) {
+          try {
+            result = await session.resume(runOptions)
+          } catch {
+            return {
+              content: [{ type: 'text', text: '(nothing is suspended — run code normally)' }],
+              details: { status: 'error', state: session.dump(), calls: [] } satisfies PythonDetails,
+            }
+          }
+        } else {
+          if (session.suspendedCode) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text:
+                    '(a script is suspended awaiting approval — call with {"resume": true}, ' +
+                    'discard it with {"abandon": true}, or reset=true; new code was not run)',
+                },
+              ],
+              details: { status: 'suspended', state: session.dump(), calls: [] } satisfies PythonDetails,
+            }
+          }
+          if (params.code === undefined) {
+            return {
+              content: [{ type: 'text', text: '(code is required unless resume=true)' }],
+              details: { status: 'error', state: session.dump(), calls: [] } satisfies PythonDetails,
+            }
+          }
+          result = await session.run(params.code, runOptions)
+        }
+
+        const abandonNote = abandoned
+          ? '[note: discarded the previously suspended script]\n'
           : ''
         let text = abandonNote + preludeNote + result.stdout
         preludeNote = ''
-        if (result.ok) {
+        if (result.status === 'ok') {
           if (result.output !== null && result.output !== undefined) {
             if (text && !text.endsWith('\n')) text += '\n'
             text += `=> ${formatValue(result.output)}`
           }
           if (!text) text = '(no output)'
-        } else if (result.errorKind === 'suspended') {
+        } else if (result.status === 'suspended') {
           if (text && !text.endsWith('\n')) text += '\n'
           text += `[suspended] The script is paused awaiting user approval of ${
-            result.suspendedCall ? formatCall(result.suspendedCall, 200) : 'a gated call'
-          }. Nothing after that call has run; completed work will not repeat. STOP and tell the user what is pending — do NOT call this tool again until the user explicitly says they have decided. Then continue with {"resume": true} (works even in a later session).`
+            formatCall(result.suspendedCall, 200)
+          }. Nothing after that call has run; completed work will not repeat. STOP and tell the user what is pending — do NOT call this tool again until the user explicitly says they have decided. Then continue with {"resume": true} (works even in a later session), or discard it with {"abandon": true}.`
         } else {
           if (text && !text.endsWith('\n')) text += '\n'
           text += result.error
@@ -370,7 +416,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         return {
           content: [{ type: 'text', text: finalText }],
           details: {
-            ok: result.ok,
+            status: result.status,
             state: session.dump(),
             calls: result.calls.map((c) => c.tool),
           } satisfies PythonDetails,

@@ -94,7 +94,7 @@ What should happen:
 2. The `write(...)` call pauses for approval.
 3. If approved, the file is written.
 4. If denied, Python receives `PermissionError`.
-5. If suspended, the run can later resume with `{"resume": true}` and already-completed work will not repeat.
+5. If suspended, the run can later resume with `{"resume": true}` and already-completed work will not repeat, or discard the pending gate with `{"abandon": true}`.
 
 ## Demo 4: Save a reusable helper
 

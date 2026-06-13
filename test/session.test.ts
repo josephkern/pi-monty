@@ -24,7 +24,7 @@ describe('Session', () => {
     const session = new Session()
     await session.run('x = 10\ndef triple(n):\n    return n * 3')
     const result = await session.run('triple(x) + 2')
-    expect(result.ok).toBe(true)
+    expect(result.status).toBe('ok')
     expect(result.output).toBe(32)
     expect(session.length).toBe(2)
   })
@@ -50,6 +50,27 @@ describe('Session', () => {
     expect(second.stdout).toBe('two\n')
   })
 
+  it('does not let truncated replayed stdout hide or stream later output', async () => {
+    const session = new Session()
+    const first = await session.run('for c in "abcdef":\n    print(c, end="")', {
+      maxStdoutBytes: 5,
+    })
+    expect(first.stdout).toBe('abcde')
+    expect(first.stdoutTruncated).toBe(true)
+
+    const restored = Session.load(session.dump())
+    let streamed = ''
+    const second = await restored.run('print("Z", end="")', {
+      maxStdoutBytes: 5,
+      onPrint: (text) => {
+        streamed += text
+      },
+    })
+    expect(second.stdout).toBe('Z')
+    expect(second.stdoutTruncated).toBe(false)
+    expect(streamed).toBe('Z')
+  })
+
   it('rolls back failed snippets completely', async () => {
     const { tool, executions } = spyTool()
     // typeCheck off: this test probes an undefined name at runtime on purpose
@@ -57,7 +78,7 @@ describe('Session', () => {
     await session.run('x = 1')
 
     const failed = await session.run('y = 2\nr = fetch_record("oops")\n1 / 0')
-    expect(failed.ok).toBe(false)
+    expect(failed.status).not.toBe('ok')
     expect(session.length).toBe(1)
     expect(executions).toHaveLength(1) // the call happened once...
 
@@ -65,7 +86,7 @@ describe('Session', () => {
       'try:\n    y\n    found = True\nexcept NameError:\n    found = False\nfound',
     )
     // ...but the failed snippet left no state and its cache entry was dropped
-    expect(after.ok).toBe(true)
+    expect(after.status).toBe('ok')
     expect(after.output).toBe(false)
     expect(executions).toHaveLength(1)
   })
@@ -86,7 +107,7 @@ describe('Session', () => {
     const { tool: tool2, executions: executions2 } = spyTool()
     const restored = Session.load(session.dump(), { tools: [tool2] })
     const result = await restored.run('rec["seq"]')
-    expect(result.ok).toBe(true)
+    expect(result.status).toBe('ok')
     expect(result.output).toBe(1)
     expect(result.stdout).toBe('')
     expect(executions2).toHaveLength(0) // fully served from the restored cache
@@ -110,11 +131,11 @@ describe('Session', () => {
     const first = await session.run(
       'try:\n    flaky()\nexcept ValueError:\n    handled = "ok"',
     )
-    expect(first.ok).toBe(true)
+    expect(first.status).toBe('ok')
     expect(attempts).toBe(1)
 
     const second = await session.run('handled')
-    expect(second.ok).toBe(true)
+    expect(second.status).toBe('ok')
     expect(second.output).toBe('ok')
     expect(second.calls).toEqual([])
     expect(attempts).toBe(1)
@@ -125,7 +146,7 @@ describe('Session', () => {
     await session.run('x = 5')
     session.reset()
     const result = await session.run('x')
-    expect(result.ok).toBe(false)
+    expect(result.status).not.toBe('ok')
     expect(result.error).toContain('not defined')
   })
 })
@@ -135,7 +156,7 @@ describe('review fixes', () => {
     const session = new Session()
     await session.run('a = 1\nb = 2\nc = 3')
     const result = await session.run('d = 4\nd.upper()')
-    expect(result.ok).toBe(false)
+    expect(result.status).not.toBe('ok')
     expect(result.errorKind).toBe('typing')
     expect(result.error).toContain('tool.py:2:') // line 2 of the submitted snippet
   })

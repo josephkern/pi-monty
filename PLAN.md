@@ -48,13 +48,10 @@ interface HostTool {
   execute(args: unknown[], kwargs: Record<string, unknown>): Promise<unknown>
 }
 
-interface RunResult {
-  ok: boolean
-  output: unknown              // last-expression value
-  stdout: string               // print() observation channel
-  error?: string               // formatted Python traceback (model-facing)
-  calls: ToolCallTrace[]       // every host-tool call: name, args, duration, result size
-}
+type RunResult =
+  | { status: 'ok'; output: unknown; stdout: string; calls: ToolCallTrace[] }
+  | { status: 'error'; errorKind: 'syntax' | 'runtime' | 'typing' | 'aborted'; error: string; stdout: string; calls: ToolCallTrace[] }
+  | { status: 'suspended'; suspendedCall: ApprovalRequest; stdout: string; calls: ToolCallTrace[] }
 ```
 
 `CodeRunner` implements the `start()` → `MontySnapshot | MontyNameLookup | MontyComplete`
@@ -116,7 +113,7 @@ verifying external functions, pause/resume, REPL dump/load, tracebacks, limits.
 
 ### M4 — pi extension (MVP ships here) ✅
 - `src/pi/extension.ts`: `createPythonExtension(options)` + default export;
-  registers a `code` tool (name configurable; Typebox params `{ code, reset? }`) whose description
+  registers a `code` tool (name configurable; Typebox params `{ code?, reset?, resume?, abandon? }`) whose description
   embeds the rendered stubs + rules
 - streaming `print()` output via `onUpdate` (new `onPrint` core option, replay-aware);
   `truncateHead` on final output; tracebacks returned as content (observation channel)
@@ -156,40 +153,23 @@ The general-purpose payoff: the agent builds its own toolbox.
   invocation); denial raises catchable PermissionError; replayed approvals never
   re-prompt. **Durable form shipped in 0.4.0**: "Decide later" suspends the run —
   executed calls stay in the replay cache, the suspension rides in session state
-  (survives pi restarts), and {"resume": true} re-runs the snippet, replaying
-  completed work and continuing live from the gate. (VM-snapshot serialization was
+  (survives pi restarts), and {"resume": true} continues via `Session.resume()`, replaying
+  completed work and continuing live from the gate; new code is rejected until the
+  caller resumes, abandons, or resets. (VM-snapshot serialization was
   probed and rejected: mounts don't survive MontySnapshot.load — see research notes.)
 - **PII tokenization** at the bridge boundary
 - ~~Publish~~ ✅ on npm as `pi-code-tool` (pi.dev gallery via the pi-package keyword)
 
-## 1.0 plan (semver-major)
+## 1.0 compatibility work (semver-major)
 
-0.5.0 fixed the suspend/resume bugs from the v0.4 code review at the patch level;
-three of that review's design findings can only be fixed by breaking the public
-API. Those are the core of the major:
+Core breaking items are implemented in this branch:
 
-- **First-class result status**: replace `ok: boolean` + `errorKind: 'suspended'`
-  with `status: 'ok' | 'error' | 'suspended'` (error subtypes stay under
-  `status: 'error'`). Today three sites special-case the one "error" that isn't
-  an error, and any consumer keying off `ok` misclassifies a healthy paused run
-  as failed (pi session details persist `ok: false` for suspensions). A
-  discriminated union makes mishandling a type error.
-- **Explicit `session.resume(options)` / `session.abandon()`**: resume is
-  inferred by comparing the submitted code to the suspended snippet (trailing
-  newlines normalized since 0.5.0, but the ambiguity cuts both ways — a byte
-  difference silently abandons; identical code sent without resume intent
-  silently resumes). A first-class entry point owns the stored snippet and its
-  inputs; `run()` stops accepting same-code-as-resume.
-- **Suspension protected by construction**: with resume/abandon as real API,
-  `Session.run()` while suspended rejects (or requires explicit abandon) instead
-  of silently discarding the pending gate. 0.5.0 surfaces abandonment after the
-  fact; models ignore prompt-text protocol (see commit 972275a), so make it
-  self-enforcing.
-- **Extension tool schema cleanup**: make `code` optional so resume is just
-  `{"resume": true}` instead of a required-but-ignored parameter (possibly a
-  proper action enum for run/resume/reset). Breaking for RPC drivers.
+- ✅ **First-class result status**: `RunResult` now uses `status: 'ok' | 'error' | 'suspended'`; error subtypes stay under `status: 'error'`.
+- ✅ **Explicit `session.resume(options)` / `session.abandon()`**: resume no longer depends on re-submitting identical code.
+- ✅ **Suspension protected by construction**: `Session.run()` rejects while suspended until the caller resumes, abandons, or resets.
+- ✅ **Extension tool schema cleanup**: `code` is optional so resume is just `{"resume": true}`; `{"abandon": true}` discards a pending suspension.
 
-Bundle (same compatibility event):
+Remaining riders for the same compatibility window:
 
 - **Session state v3 with delta encoding** — per-message dumps grow pi session
   files O(n²) (slightly worse since 0.5.0: unconditional dumps + cache identity

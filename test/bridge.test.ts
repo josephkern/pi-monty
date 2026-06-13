@@ -71,7 +71,7 @@ files = sorted(set(l.split(":")[0] for l in hits.splitlines() if ":" in l))
 print(files)
 len(files)`,
     )
-    expect(result.ok).toBe(true)
+    expect(result.status).toBe('ok')
     expect(result.output).toBe(2)
     expect(result.calls.map((c) => c.tool)).toEqual(['grep'])
   })
@@ -81,13 +81,13 @@ len(files)`,
     const denied = await runner.run('write("new.txt", "content")', {
       onApproval: () => false,
     })
-    expect(denied.ok).toBe(false)
+    expect(denied.status).not.toBe('ok')
     expect(denied.error).toContain('PermissionError')
 
     const approved = await runner.run('write("new.txt", "content")', {
       onApproval: () => true,
     })
-    expect(approved.ok).toBe(true)
+    expect(approved.status).toBe('ok')
     expect(await readFile(join(cwd, 'new.txt'), 'utf8')).toBe('content')
   })
 
@@ -96,7 +96,7 @@ len(files)`,
     const result = await runner.run(
       'try:\n    read("missing.txt")\n    msg = "read"\nexcept RuntimeError as e:\n    msg = "failed"\nmsg',
     )
-    expect(result.ok).toBe(true)
+    expect(result.status).toBe('ok')
     expect(result.output).toBe('failed')
   })
 })

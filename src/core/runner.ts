@@ -10,15 +10,14 @@ import {
 import type { ResourceLimits } from '@pydantic/monty'
 import { probeTypeCheckerGaps } from './capabilities.js'
 import { ToolRegistry } from './registry.js'
+import { DEFAULT_MAX_STDOUT_BYTES, appendCappedUtf8 } from './stdout.js'
 import { HostToolError } from './types.js'
-import type { HostTool, RunLimits, RunOptions, RunResult, ToolCallTrace } from './types.js'
+import type { ApprovalRequest, HostTool, RunErrorKind, RunLimits, RunOptions, RunResult, ToolCallTrace } from './types.js'
 
 const DEFAULT_LIMITS: Required<Pick<RunLimits, 'maxDurationSecs' | 'maxMemory'>> = {
   maxDurationSecs: 5,
   maxMemory: 64 * 1024 * 1024,
 }
-
-const DEFAULT_MAX_STDOUT_BYTES = 1024 * 1024
 
 const PYTHON_KEYWORDS = new Set([
   'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break',
@@ -82,14 +81,10 @@ export class CodeRunner {
   async run(code: string, options: RunOptions = {}): Promise<RunResult> {
     const calls: ToolCallTrace[] = []
     const maxStdoutBytes = options.maxStdoutBytes ?? DEFAULT_MAX_STDOUT_BYTES
-    let stdout = ''
-    let stdoutBytes = 0
-    let stdoutTruncated = false
+    let stdout = { text: '', bytes: 0, truncated: false }
     const printCallback = (_stream: string, text: string) => {
       options.onPrint?.(text)
-      stdoutBytes += Buffer.byteLength(text)
-      if (stdoutBytes <= maxStdoutBytes) stdout += text
-      else stdoutTruncated = true
+      stdout = appendCappedUtf8(stdout, text, maxStdoutBytes)
       // must not return a value: the native layer raises TypeError otherwise
     }
 
@@ -119,10 +114,25 @@ export class CodeRunner {
     const prefix = prefixLines.join('\n')
     const prefixLineCount = prefix === '' ? 0 : prefix.split('\n').length
 
-    const fail = (
-      errorKind: NonNullable<RunResult['errorKind']>,
-      error: string,
-    ): RunResult => ({ ok: false, output: undefined, stdout, stdoutTruncated, error, errorKind, calls })
+    const fail = (errorKind: RunErrorKind, error: string): RunResult => ({
+      status: 'error',
+      output: undefined,
+      stdout: stdout.text,
+      stdoutTruncated: stdout.truncated,
+      error,
+      errorKind,
+      calls,
+    })
+
+    const suspend = (request: ApprovalRequest): RunResult => ({
+      status: 'suspended',
+      output: undefined,
+      stdout: stdout.text,
+      stdoutTruncated: stdout.truncated,
+      error: `suspended awaiting approval of ${request.tool}(...)`,
+      suspendedCall: request,
+      calls,
+    })
 
     const locationRe = new RegExp(
       `${scriptName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:(\\d+):`,
@@ -248,14 +258,9 @@ export class CodeRunner {
             // the script is frozen at this call while the human decides
             const decision = await options.onApproval(request)
             if (decision === 'suspend') {
-              // abandon the run before the call executes; everything that DID
-              // execute is in `calls`, so a later re-run can replay up to here
-              const result = fail(
-                'suspended',
-                `suspended awaiting approval of ${tool.name}(...)`,
-              )
-              result.suspendedCall = request
-              return result
+              // stop before the call executes; everything that DID execute is
+              // in `calls`, so Session.resume() can replay up to here
+              return suspend(request)
             }
             trace.approved = decision
             if (!decision) denial = `${tool.name} call denied by the user`
@@ -288,6 +293,6 @@ export class CodeRunner {
       }
     }
 
-    return { ok: true, output: progress.output, stdout, stdoutTruncated, calls }
+    return { status: 'ok', output: progress.output, stdout: stdout.text, stdoutTruncated: stdout.truncated, calls }
   }
 }

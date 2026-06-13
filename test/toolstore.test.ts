@@ -61,7 +61,7 @@ describe('ToolStore', () => {
 
     const session = new Session({ tools: store.hostTools(() => false) })
     const result = await session.run('read_tool("../secret")')
-    expect(result.ok).toBe(false)
+    expect(result.status).not.toBe('ok')
     expect(result.error).toContain("no saved tool named '../secret'")
   })
 
@@ -76,7 +76,7 @@ describe('ToolStore', () => {
       `code = 'def shout(text):\\n    return text.upper() + "!"'
 save_tool("shout", code, "Uppercase with a bang.")`,
     )
-    expect(saved.ok).toBe(true)
+    expect(saved.status).toBe('ok')
     expect((await store.list()).map((t) => t.name)).toEqual(['shout'])
 
     const listed = await session.run('[t["name"] for t in list_saved_tools()]')
@@ -89,7 +89,7 @@ save_tool("shout", code, "Uppercase with a bang.")`,
     const store = new ToolStore(dir)
     const session = new Session({ tools: store.hostTools((name) => name === 'read_file') })
     const result = await session.run('save_tool("read_file", "def read_file():\\n    pass", "d")')
-    expect(result.ok).toBe(false)
+    expect(result.status).not.toBe('ok')
     expect(result.error).toContain('built-in tool name')
   })
 })

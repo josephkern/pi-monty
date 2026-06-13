@@ -1,5 +1,6 @@
 import { CodeRunner } from './runner.js'
 import { ToolRegistry } from './registry.js'
+import { DEFAULT_MAX_STDOUT_BYTES, appendCappedUtf8 } from './stdout.js'
 import { HostToolError } from './types.js'
 import type { ApprovalRequest, HostTool, RunLimits, RunOptions, RunResult } from './types.js'
 
@@ -20,12 +21,14 @@ interface CachedCall {
 }
 
 interface SuspendedRun {
-  /** The snippet abandoned at a gated call; resuming = re-running it. */
+  /** The snippet stopped at a gated call; resume() replays it up to the gate. */
   code: string
   /** Cache length before the suspended run — the rollback point. */
   cacheLen: number
   /** Output the partial run already delivered, suppressed again on resume. */
   stdout: string
+  /** Actual character count for partial output; stdout may be capped/truncated. */
+  stdoutChars?: number
   /** Inputs the suspended run was started with, re-applied on resume. */
   inputs?: Record<string, unknown>
 }
@@ -35,6 +38,8 @@ interface SessionState {
   snippets: Snippet[]
   calls: CachedCall[]
   stdout: string
+  /** Actual character count for committed stdout; stdout may be capped/truncated. */
+  stdoutChars?: number
   suspended?: SuspendedRun
 }
 
@@ -73,6 +78,7 @@ export class Session {
   private snippets: Snippet[] = []
   private calls: CachedCall[] = []
   private stdout = ''
+  private stdoutChars = 0
   private suspended: SuspendedRun | null = null
 
   constructor(options: SessionOptions = {}) {
@@ -87,25 +93,40 @@ export class Session {
     return this.snippets.length
   }
 
-  /** The gated snippet awaiting a decision; re-run the same code to resume. */
+  /** The gated snippet awaiting a decision; call resume() to continue it. */
   get suspendedCode(): string | null {
     return this.suspended?.code ?? null
   }
 
   async run(code: string, options: RunOptions = {}): Promise<RunResult> {
-    // A suspended run resumes by re-running the same snippet (compared
-    // ignoring trailing newlines, like execution does): its executed calls
-    // stayed cached, so replay skips straight to the pending gated call.
-    // Running anything ELSE abandons the suspension and rolls those
-    // partial-run calls out of the cache to keep replay alignment.
-    const prior = this.suspended
-    const resuming = prior !== null && normalize(prior.code) === normalize(code)
-    const abandoned = prior !== null && !resuming
-    if (prior && !resuming) {
-      this.calls = this.calls.slice(0, prior.cacheLen)
+    if (this.suspended) {
+      throw new Error('A run is suspended; call resume() or abandon() before running new code')
     }
-    const rollbackTo = resuming ? prior!.cacheLen : this.calls.length
+    return this.execute(code, options, null)
+  }
+
+  /** Resume the currently suspended snippet, preserving its original code and inputs. */
+  async resume(options: RunOptions = {}): Promise<RunResult> {
+    if (!this.suspended) throw new Error('No suspended run to resume')
+    return this.execute(this.suspended.code, options, this.suspended)
+  }
+
+  /** Discard a pending suspension and roll back its pre-gate cached calls. */
+  abandon(): boolean {
+    if (!this.suspended) return false
+    this.calls = this.calls.slice(0, this.suspended.cacheLen)
     this.suspended = null
+    return true
+  }
+
+  private async execute(
+    code: string,
+    options: RunOptions,
+    prior: SuspendedRun | null,
+  ): Promise<RunResult> {
+    const resuming = prior !== null
+    const rollbackTo = resuming ? prior!.cacheLen : this.calls.length
+    if (resuming) this.suspended = null
 
     const transcript = this.snippets.map((s) => normalize(s.code))
     const combined = [...transcript, normalize(code)].join('\n')
@@ -163,16 +184,22 @@ export class Session {
     )
 
     // Replay re-prints earlier output (committed transcript plus a suspended
-    // run's already-delivered partial output); forward only chunks past it.
-    const replayChars = this.stdout.length + (resuming ? prior!.stdout.length : 0)
+    // run's already-delivered partial output); forward and capture only chunks
+    // past it. Track actual character counts separately from capped captured
+    // stdout so truncation doesn't make replayed tail look new later.
+    const priorStdoutChars = resuming ? (prior!.stdoutChars ?? prior!.stdout.length) : 0
+    const replayChars = this.stdoutChars + priorStdoutChars
+    const maxStdoutBytes = options.maxStdoutBytes ?? DEFAULT_MAX_STDOUT_BYTES
     let printed = 0
-    const onPrint = options.onPrint
-      ? (text: string) => {
-          const start = printed
-          printed += text.length
-          if (printed > replayChars) options.onPrint!(text.slice(Math.max(0, replayChars - start)))
-        }
-      : undefined
+    let stdout = { text: '', bytes: 0, truncated: false }
+    const onPrint = (text: string) => {
+      const start = printed
+      printed += text.length
+      if (printed <= replayChars) return
+      const fresh = text.slice(Math.max(0, replayChars - start))
+      stdout = appendCappedUtf8(stdout, fresh, maxStdoutBytes)
+      options.onPrint?.(fresh)
+    }
 
     // Replayed gated calls were already decided: executed ones are served
     // from the cache (no side effect can happen) and denied ones re-raise
@@ -205,11 +232,11 @@ export class Session {
     })
 
     // Surface only this snippet's new contribution: not the replayed prefix,
-    // and not output a suspension already delivered. Slice by length (not
-    // startsWith) so a replay whose output drifted — e.g. a mounted file
-    // changed on disk — doesn't re-emit old output.
-    const fullStdout = result.stdout
-    result.stdout = fullStdout.slice(replayChars)
+    // and not output a suspension already delivered. This is captured from the
+    // uncapped print stream rather than runner.stdout, because runner.stdout is
+    // capped across the whole replayed script and prior output can consume it.
+    result.stdout = stdout.text
+    result.stdoutTruncated = stdout.truncated
     result.calls = result.calls.slice(served)
 
     // Entries from a divergence point up to the old cache end were proven
@@ -224,22 +251,28 @@ export class Session {
     // resume. A failed resume can end short of the prior partial output —
     // keep the longer record so nothing re-emits.
     const partialStdout = () => {
-      const out = fullStdout.slice(this.stdout.length)
-      return resuming && prior!.stdout.length > out.length ? prior!.stdout : out
+      const freshChars = Math.max(0, printed - replayChars)
+      return {
+        stdout: (resuming ? prior!.stdout : '') + stdout.text,
+        stdoutChars: priorStdoutChars + freshChars,
+      }
     }
 
-    if (result.ok) {
+    if (result.status === 'ok') {
       reconcile()
       this.snippets.push({ code, ...(runInputs ? { inputs: runInputs } : {}) })
-      this.stdout = fullStdout
-    } else if (result.errorKind === 'suspended') {
+      this.stdout += (resuming ? prior!.stdout : '') + result.stdout
+      this.stdoutChars = printed
+    } else if (result.status === 'suspended') {
       // keep this run's executed calls cached so resuming doesn't repeat
       // them, plus the delivered output and the inputs it ran with
       reconcile()
+      const partial = partialStdout()
       this.suspended = {
         code,
         cacheLen: divergedAt === null ? rollbackTo : Math.min(rollbackTo, divergedAt),
-        stdout: partialStdout(),
+        stdout: partial.stdout,
+        stdoutChars: partial.stdoutChars,
         ...(runInputs ? { inputs: runInputs } : {}),
       }
     } else if (resuming && divergedAt === null) {
@@ -250,16 +283,17 @@ export class Session {
       while (this.calls.length > rollbackTo && this.calls[this.calls.length - 1]!.denied) {
         this.calls.pop()
       }
+      const partial = partialStdout()
       this.suspended = {
         code,
         cacheLen: rollbackTo,
-        stdout: partialStdout(),
+        stdout: partial.stdout,
+        stdoutChars: partial.stdoutChars,
         ...(runInputs ? { inputs: runInputs } : {}),
       }
     } else {
       this.calls = this.calls.slice(0, rollbackTo)
     }
-    if (abandoned) result.abandonedSuspension = true
     return result
   }
 
@@ -267,6 +301,7 @@ export class Session {
     this.snippets = []
     this.calls = []
     this.stdout = ''
+    this.stdoutChars = 0
     this.suspended = null
   }
 
@@ -276,6 +311,7 @@ export class Session {
       snippets: this.snippets,
       calls: this.calls,
       stdout: this.stdout,
+      stdoutChars: this.stdoutChars,
       ...(this.suspended ? { suspended: this.suspended } : {}),
     }
     return JSON.stringify(state)
@@ -290,10 +326,15 @@ export class Session {
     session.snippets = state.snippets
     session.calls = state.calls
     session.stdout = state.stdout
+    session.stdoutChars = state.stdoutChars ?? state.stdout.length
     // pre-v2 suspensions lack the delivered-stdout record; resuming one
     // re-emits the partial output once rather than failing the restore
     session.suspended = state.suspended
-      ? { ...state.suspended, stdout: state.suspended.stdout ?? '' }
+      ? {
+          ...state.suspended,
+          stdout: state.suspended.stdout ?? '',
+          stdoutChars: state.suspended.stdoutChars ?? (state.suspended.stdout ?? '').length,
+        }
       : null
     return session
   }

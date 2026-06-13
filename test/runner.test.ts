@@ -21,7 +21,7 @@ const fetchData: HostTool = {
 describe('CodeRunner basics', () => {
   it('returns the last expression', async () => {
     const result = await new CodeRunner().run('1 + 2')
-    expect(result).toMatchObject({ ok: true, output: 3, stdout: '', calls: [] })
+    expect(result).toMatchObject({ status: 'ok', output: 3, stdout: '', calls: [] })
   })
 
   it('injects inputs as variables', async () => {
@@ -39,9 +39,18 @@ describe('CodeRunner basics', () => {
     const result = await new CodeRunner().run('for i in range(100):\n    print("x" * 10)', {
       maxStdoutBytes: 50,
     })
-    expect(result.ok).toBe(true)
+    expect(result.status).toBe('ok')
     expect(result.stdoutTruncated).toBe(true)
     expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(50)
+  })
+
+  it('keeps the prefix of a print chunk that crosses the stdout cap', async () => {
+    const result = await new CodeRunner().run('print("abcdef", end="")', {
+      maxStdoutBytes: 4,
+    })
+    expect(result.status).toBe('ok')
+    expect(result.stdout).toBe('abcd')
+    expect(result.stdoutTruncated).toBe(true)
   })
 })
 
@@ -75,7 +84,7 @@ describe('host tools', () => {
       ],
     })
     const result = await runner.run('record(1, "two", flag=True)')
-    expect(result.ok).toBe(true)
+    expect(result.status).toBe('ok')
     expect(seen).toEqual([[[1, 'two'], { flag: true }]])
   })
 
@@ -99,14 +108,14 @@ describe('host tools', () => {
 describe('error paths', () => {
   it('reports syntax errors', async () => {
     const result = await new CodeRunner().run('def f(:')
-    expect(result.ok).toBe(false)
+    expect(result.status).not.toBe('ok')
     expect(result.errorKind).toBe('syntax')
     expect(result.error).toMatch(/invalid-syntax|SyntaxError/)
   })
 
   it('reports runtime errors with a traceback', async () => {
     const result = await new CodeRunner().run('def f():\n    return 1 / 0\nf()')
-    expect(result.ok).toBe(false)
+    expect(result.status).not.toBe('ok')
     expect(result.errorKind).toBe('runtime')
     expect(result.error).toContain('ZeroDivisionError')
     expect(result.error).toContain('line 2')
@@ -115,21 +124,21 @@ describe('error paths', () => {
   it('keeps stdout and calls from before a runtime error', async () => {
     const runner = new CodeRunner({ tools: [double] })
     const result = await runner.run('print(double(2))\n1 / 0')
-    expect(result.ok).toBe(false)
+    expect(result.status).not.toBe('ok')
     expect(result.stdout).toBe('4\n')
     expect(result.calls).toHaveLength(1)
   })
 
   it('rejects unknown names at type-check time', async () => {
     const result = await new CodeRunner().run('mystery(1)')
-    expect(result.ok).toBe(false)
+    expect(result.status).not.toBe('ok')
     expect(result.errorKind).toBe('typing')
     expect(result.error).toContain('mystery')
   })
 
   it('raises NameError at runtime with typeCheck disabled', async () => {
     const result = await new CodeRunner({ typeCheck: false }).run('mystery(1)')
-    expect(result.ok).toBe(false)
+    expect(result.status).not.toBe('ok')
     expect(result.errorKind).toBe('runtime')
     expect(result.error).toContain('NameError')
   })
@@ -137,7 +146,7 @@ describe('error paths', () => {
   it('catches bad types on tool results before execution', async () => {
     const runner = new CodeRunner({ tools: [double] })
     const result = await runner.run('x = double(2)\nprint(x)\nx.upper()')
-    expect(result.ok).toBe(false)
+    expect(result.status).not.toBe('ok')
     expect(result.errorKind).toBe('typing')
     expect(result.error).toContain('upper')
     expect(result.error).toContain('tool.py:3:') // adjusted past the stub prefix
@@ -162,12 +171,12 @@ describe('error paths', () => {
     const caught = await runner.run(
       'try:\n    flaky()\n    msg = "no error"\nexcept ValueError as e:\n    msg = f"caught: {e}"\nmsg',
     )
-    expect(caught.ok).toBe(true)
+    expect(caught.status).toBe('ok')
     expect(caught.output).toBe('caught: record not found')
     expect(caught.calls[0]).toMatchObject({ ok: false, error: 'ValueError: record not found' })
 
     const uncaught = await runner.run('flaky()')
-    expect(uncaught.ok).toBe(false)
+    expect(uncaught.status).not.toBe('ok')
     expect(uncaught.error).toContain('ValueError: record not found')
   })
 
@@ -186,14 +195,14 @@ describe('error paths', () => {
       ],
     })
     const result = await runner.run('boom()')
-    expect(result.ok).toBe(false)
+    expect(result.status).not.toBe('ok')
     expect(result.error).toContain('RuntimeError: wires crossed')
   })
 
   it('dispatches calls made through aliases', async () => {
     const runner = new CodeRunner({ tools: [double] })
     const result = await runner.run('f = double\nf(2) + f(3)')
-    expect(result.ok).toBe(true)
+    expect(result.status).toBe('ok')
     expect(result.output).toBe(10)
     expect(result.calls.map((c) => c.tool)).toEqual(['double', 'double'])
   })
@@ -202,7 +211,7 @@ describe('error paths', () => {
     const result = await new CodeRunner().run('while True:\n    pass', {
       limits: { maxDurationSecs: 1 },
     })
-    expect(result.ok).toBe(false)
+    expect(result.status).not.toBe('ok')
     expect(result.errorKind).toBe('runtime')
     expect(result.error).toContain('time limit exceeded')
   })
@@ -224,7 +233,7 @@ describe('error paths', () => {
       ],
     })
     const result = await runner.run('slow()\nprint("never")', { signal: controller.signal })
-    expect(result.ok).toBe(false)
+    expect(result.status).not.toBe('ok')
     expect(result.errorKind).toBe('aborted')
     expect(result.stdout).not.toContain('never')
   })
@@ -244,7 +253,7 @@ describe('review fixes', () => {
       ],
     })
     const result = await runner.run('print(fetch_json("x"))\nlen("done")')
-    expect(result.ok).toBe(true)
+    expect(result.status).toBe('ok')
     expect(result.output).toBe(4)
     expect(result.calls).toHaveLength(1)
   })
@@ -265,7 +274,7 @@ describe('review fixes', () => {
 
   it('shifts typing diagnostics by lineOffset', async () => {
     const result = await new CodeRunner().run('pad = 1\n"s".uppercase()', { lineOffset: 1 })
-    expect(result.ok).toBe(false)
+    expect(result.status).not.toBe('ok')
     expect(result.error).toContain('tool.py:1:')
   })
 })

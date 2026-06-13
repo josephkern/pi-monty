@@ -137,7 +137,7 @@ for f in files:
 print("\\n".join(texts))
 len(texts)`,
     )
-    expect(result.ok).toBe(true)
+    expect(result.status).toBe('ok')
     expect(result.stdout).toContain('hello.txt: hello world')
     expect(result.stdout).toContain('sneaky.txt: <blocked>')
     expect(result.output).toBe(2)

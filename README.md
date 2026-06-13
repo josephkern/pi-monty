@@ -44,7 +44,8 @@ mid-execution at the call, pi shows a confirm dialog with the exact invocation, 
 your answer resumes the script in place — deny and the sandbox raises a catchable
 `PermissionError`, or pick **"Decide later"** to suspend the run entirely: completed
 work stays cached, the suspension survives pi restarts, and `{"resume": true}`
-continues the script from the exact gated call — even days later. The model writes a
+continues the script from the exact gated call — even days later; `{"abandon": true}`
+discards the pending gated call without resetting the rest of the session. The model writes a
 30-line codemod; you approve each mutation without it burning a single extra token.
 Replayed (already-approved) calls never re-prompt. Headless runs deny gated calls
 unless you opt in with `autoApprove`.
@@ -125,17 +126,19 @@ import { CodeRunner, Session, ToolRegistry, createBuiltinTools } from './src/ind
 
 const runner = new CodeRunner({ tools: createBuiltinTools({ root: process.cwd() }) })
 const result = await runner.run('len(list_files("."))')
-// result: { ok, output, stdout, error?, calls }
+// result: { status: 'ok', output, stdout, calls }
 ```
 
 `Session` adds persistent state across runs (replay with a tool-call cache — earlier
-side effects never repeat). `ToolStore` adds the saved-tools layer.
+side effects never repeat). If an approval gate suspends a run, call
+`session.resume()` to continue or `session.abandon()` to discard it before running
+new code. `ToolStore` adds the saved-tools layer.
 
 ## Develop
 
 ```bash
 npm install
-npm test            # vitest (109 tests)
+npm test            # vitest (111 tests)
 npm run typecheck
 npm run smoke       # verifies monty primitives on your machine
 npx tsx examples/demo.ts

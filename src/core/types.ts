@@ -107,36 +107,57 @@ export interface RunOptions {
   /**
    * Decides gated (requiresApproval) host-tool calls. The script is paused
    * mid-execution while this resolves; returning false raises a catchable
-   * PermissionError in the sandbox, and returning 'suspend' abandons the run
-   * before the call executes so it can be resumed later (see Session: re-run
-   * the same code and the replay cache picks up where it left off). Gated
-   * calls are denied if omitted.
+   * PermissionError in the sandbox, and returning 'suspend' stops the run
+   * before the call executes so it can be resumed later (see Session.resume():
+   * the replay cache picks up where it left off). Gated calls are denied if
+   * omitted.
    */
   onApproval?: (request: ApprovalRequest) => ApprovalDecision | Promise<ApprovalDecision>
 }
 
 export type ApprovalDecision = boolean | 'suspend'
 
-export interface RunResult {
-  ok: boolean
-  /** Value of the last expression (undefined on failure). */
-  output: unknown
+export type RunErrorKind = 'syntax' | 'runtime' | 'typing' | 'aborted'
+
+interface RunResultBase {
   /** Captured print() output — the model-facing observation channel. */
   stdout: string
   /** True if stdout exceeded maxStdoutBytes and was truncated. */
   stdoutTruncated: boolean
-  /** Model-facing failure description (Python traceback, syntax error, abort notice). */
-  error?: string
-  /** Kind of failure, when ok is false. */
-  errorKind?: 'syntax' | 'runtime' | 'typing' | 'aborted' | 'suspended'
   /** Every host-tool call the code made, in order. */
   calls: ToolCallTrace[]
-  /** The gated call awaiting a decision, when errorKind is 'suspended'. */
+  /** Present for errors and suspensions. */
+  error?: string
+  /** Present only when status is 'error'. */
+  errorKind?: RunErrorKind
+  /** Present only when status is 'suspended'. */
   suspendedCall?: ApprovalRequest
-  /**
-   * Set by Session.run when this run's code replaced a pending suspension:
-   * the suspended snippet's partial work was rolled back and its pending
-   * gated call discarded.
-   */
-  abandonedSuspension?: boolean
 }
+
+export interface RunSuccess extends RunResultBase {
+  status: 'ok'
+  /** Value of the last expression. */
+  output: unknown
+}
+
+export interface RunError extends RunResultBase {
+  status: 'error'
+  /** Undefined on failure. */
+  output: undefined
+  /** Model-facing failure description (Python traceback, syntax error, abort notice). */
+  error: string
+  /** Kind of failure. */
+  errorKind: RunErrorKind
+}
+
+export interface RunSuspended extends RunResultBase {
+  status: 'suspended'
+  /** Undefined while suspended. */
+  output: undefined
+  /** Model-facing suspension description. */
+  error: string
+  /** The gated call awaiting a decision. */
+  suspendedCall: ApprovalRequest
+}
+
+export type RunResult = RunSuccess | RunError | RunSuspended
