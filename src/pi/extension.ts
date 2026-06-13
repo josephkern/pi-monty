@@ -233,8 +233,9 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
         'Prefer this tool when you need to chain tool calls, loop, filter large',
         'results, or compute — do the work in code and print only what you need.',
         '',
-        'Functions available INSIDE the code (these are not separate tools — invoke',
-        `them from Python passed to ${toolName}):`,
+        'Python-only helper functions available INSIDE this tool:',
+        `- These names are NOT standalone pi tools; they only exist in Python code passed to ${toolName}.`,
+        `- Example: call ${toolName} with code like \`print(ls("."))\`; do not try to invoke \`ls\` as a separate pi tool.`,
         '',
         registry.renderStubs(),
         ...(savedSummary
@@ -255,7 +256,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
           : []),
         ...(makeMount
           ? [
-              `- The workspace is mounted READ-ONLY at /workspace: read files with open("/workspace/<path>") or pathlib (paths from list_files are relative to it). Files are not iterable — use .read()/.readlines(); parse JSON with json.loads(text). Writes raise PermissionError; change real files with the regular edit/write tools.`,
+              `- The workspace is mounted READ-ONLY at /workspace: read files with open("/workspace/<path>") or pathlib. Helper-tool paths such as ls/find results are relative to the workspace root. Files are not iterable — use .read()/.readlines(); parse JSON with json.loads(text). Writes raise PermissionError; change real files with the regular edit/write tools.`,
             ]
           : []),
       ].join('\n'),
@@ -269,11 +270,7 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
           : []),
         ...(registry.list().length > 0
           ? [
-              `Functions listed in the ${toolName} tool description (${registry
-                .list()
-                .slice(0, 3)
-                .map((t) => t.name)
-                .join(', ')}, ...) are NOT standalone tools — they only exist inside ${toolName}'s Python environment. To use one, call ${toolName} with code that invokes it.`,
+              `Names listed in the ${toolName} tool description are Python helper functions only, not top-level pi tools. If you need one (for example ${formatNameList(registry.list().slice(0, 6).map((t) => t.name))}), call ${toolName} and invoke it from Python code there.`,
             ]
           : []),
         ...(store
@@ -381,6 +378,12 @@ export function createPythonExtension(options: PythonExtensionOptions = {}) {
       },
     })
   }
+}
+
+function formatNameList(names: string[]): string {
+  if (names.length === 0) return 'the listed functions'
+  if (names.length === 1) return names[0]!
+  return `${names.slice(0, -1).join(', ')}, or ${names[names.length - 1]}`
 }
 
 function formatValue(value: unknown): string {

@@ -41,6 +41,8 @@ describe('python pi extension', () => {
     const { tool } = await loadExtension({ tools: [greet], noBuiltins: true })
     expect(tool.name).toBe('code')
     expect(tool.description).toContain('def greet(name: str) -> str:')
+    expect(tool.description).toContain('NOT standalone pi tools')
+    expect(tool.description).toContain('print(ls("."))')
     expect(tool.description).toContain('WITHOUT `await`')
   })
 
@@ -69,6 +71,7 @@ describe('python pi extension', () => {
     expect(tool.description).not.toContain('def read_file(')
     expect(tool.description).not.toContain('def list_files(')
     expect(tool.description).toContain('/workspace')
+    expect(tool.description).toContain('Helper-tool paths such as ls/find results')
   })
 
   it('keeps list_files and skips pi tools when the bridge is off', async () => {
